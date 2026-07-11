@@ -5,6 +5,7 @@ const settingsKey = "hsk_flashcard_settings_v2";
 let progress = JSON.parse(localStorage.getItem(stateKey) || "{}");
 let settings = JSON.parse(localStorage.getItem(settingsKey) || "{}");
 let session = [], current = 0, selectedLevels = settings.selectedLevels || ["HSK1"], flipped = false, sessionGrades = [];
+let snapshots = {};   // in-memory per-session-index undo history for SRS (never persisted)
 
 const $ = id => document.getElementById(id);
 
@@ -97,7 +98,10 @@ function readAll(){
   ]);
 }
 const views = ["homeView","studyView","completeView"];
-function showView(id){ views.forEach(v => $(v).classList.toggle("active", v===id)); }
+function showView(id){
+  views.forEach(v => $(v).classList.toggle("active", v===id));
+  document.body.classList.toggle("studying", id==="studyView");  // enables one-screen mobile layout
+}
 function today(){ return new Date().toISOString().slice(0,10); }
 function getCardState(id){ return progress[id] || {due: today(), interval:0, reps:0, correct:0, attempts:0}; }
 function save(){ localStorage.setItem(stateKey, JSON.stringify(progress)); }
@@ -175,7 +179,7 @@ function startStudy(levels){
     session=fallback.slice(0, sizeSetting==="all"?fallback.length:Number(sizeSetting));
   }
 
-  current=0; sessionGrades=[]; updateStreak(); showView("studyView"); renderCard();
+  current=0; sessionGrades=[]; snapshots={}; updateStreak(); showView("studyView"); renderCard();
 }
 
 function renderCard(){
@@ -185,6 +189,7 @@ function renderCard(){
   $("ratingArea").classList.add("hidden");
   $("nextBtn").classList.add("hidden");
   $("logicPanel").classList.add("hidden");
+  $("sheetBackdrop").classList.add("hidden");
   $("flipHint").textContent="Bấm vào thẻ để lật";
   $("studyLevel").textContent=[...new Set(session.map(x=>x.level))].join(" + ");
   $("cardIndex").textContent=current+1; $("cardTotal").textContent=session.length;
@@ -195,7 +200,7 @@ function renderCard(){
   $("srStatus").textContent=`Thẻ ${current+1} trên ${session.length}. ${c.level}: ${c.word}.`;
   stopSpeech();                       // always stop audio when the card changes
   if(settings.autoReadWord) speakWord();
-  $("flashcard").focus();             // keep keyboard focus on the card
+  $("flashcard").focus({preventScroll:true});   // keep keyboard focus without scroll jumps
 }
 
 function flipCard(){
@@ -211,8 +216,26 @@ function flipCard(){
   if(flipped){ stopSpeech(); if(settings.autoReadExample) speakExample(); } else stopSpeech();
 }
 
+// Per-session-index undo history so revisiting a card can't double-count SRS.
+function captureSnapshot(index,id){
+  const k="i"+index;
+  if(!(k in snapshots)){
+    const had=Object.prototype.hasOwnProperty.call(progress,id);
+    snapshots[k]={id,had,state:had?JSON.parse(JSON.stringify(progress[id])):null};
+  }
+}
+function revertSnapshot(index){
+  const snap=snapshots["i"+index];
+  if(!snap) return;
+  if(snap.had) progress[snap.id]=JSON.parse(JSON.stringify(snap.state));
+  else delete progress[snap.id];
+}
+
 function gradeCard(grade){
-  const c=session[current], s=getCardState(c.id), now=new Date();
+  const c=session[current];
+  captureSnapshot(current,c.id);   // remember pre-grade state (once per position)
+  revertSnapshot(current);         // undo any earlier grade at this position before re-applying
+  const s=getCardState(c.id), now=new Date();
   let days;
   if(grade==="again"){
     days=0;
@@ -236,14 +259,24 @@ function gradeCard(grade){
   s.attempts=(s.attempts||0)+1;
   if(grade==="good"||grade==="easy") s.correct=(s.correct||0)+1;
   progress[c.id]=s; save();
-  sessionGrades.push(grade); current++; renderCard();
+  sessionGrades[current]=grade;    // index-addressed: re-grading overwrites, never duplicates
+  current++; renderCard();
 }
 
 function skipCard(){
-  sessionGrades.push("skip");
+  if(("i"+current) in snapshots){  // this position was graded before -> undo its SRS effect
+    revertSnapshot(current);
+    delete snapshots["i"+current];
+    save();
+  }
+  sessionGrades[current]="skip";
   current++;
   renderCard();
 }
+
+// Swipe LEFT = Next/Skip (no grading). Swipe RIGHT = previous card (pure navigation).
+function swipeNext(){ skipCard(); }
+function swipePrev(){ if(current>0){ current--; renderCard(); } }
 
 function finishSession(){
   stopSpeech();
@@ -256,19 +289,62 @@ function finishSession(){
 
 function exitStudy(){ stopSpeech(); showView("homeView"); renderHome(); $("startMixedBtn").focus(); }
 
-$("flashcard").onclick=flipCard;
+/* ---------- Swipe / mouse-drag navigation on the flashcard ---------- */
+const SWIPE_THRESHOLD=80, DRAG_ACTIVATE=10;
+let drag=null, suppressClick=false;
+const fc=$("flashcard");
+
+fc.addEventListener("pointerdown",e=>{
+  if(e.pointerType==="mouse" && e.button!==0) return;      // primary button only
+  suppressClick=false;
+  drag={x0:e.clientX,y0:e.clientY,dx:0,dy:0,id:e.pointerId,decided:false};
+});
+fc.addEventListener("pointermove",e=>{
+  if(!drag || e.pointerId!==drag.id) return;
+  drag.dx=e.clientX-drag.x0; drag.dy=e.clientY-drag.y0;
+  if(!drag.decided){
+    if(Math.abs(drag.dx)>DRAG_ACTIVATE && Math.abs(drag.dx)>Math.abs(drag.dy)){
+      drag.decided=true; fc.classList.add("dragging");
+      try{ fc.setPointerCapture(e.pointerId); }catch(_){}
+    } else if(Math.abs(drag.dy)>DRAG_ACTIVATE){ drag=null; return; }   // vertical intent -> let it scroll
+  }
+  if(drag.decided){ e.preventDefault(); fc.style.setProperty("--drag-x",drag.dx+"px"); }
+});
+function endDrag(){
+  if(!drag) return;
+  const {dx,dy,decided}=drag; drag=null;
+  fc.classList.remove("dragging");
+  fc.style.removeProperty("--drag-x");
+  if(decided){
+    suppressClick=true;                                    // a drag must never flip/read
+    if(Math.abs(dx)>=SWIPE_THRESHOLD && Math.abs(dx)>Math.abs(dy)){
+      if(dx<0) swipeNext(); else swipePrev();
+    }                                                      // else: snap back (transition to 0)
+  }
+}
+fc.addEventListener("pointerup",endDrag);
+fc.addEventListener("pointercancel",()=>{ if(drag){ drag=null; fc.classList.remove("dragging"); fc.style.removeProperty("--drag-x"); } });
+
+fc.onclick=()=>{ if(suppressClick){ suppressClick=false; return; } flipCard(); };
 document.querySelectorAll(".rate").forEach(b=>b.onclick=e=>{e.stopPropagation();gradeCard(b.dataset.grade)});
 $("nextBtn").onclick=skipCard;
-$("logicBtn").onclick=()=>$("logicPanel").classList.toggle("hidden");
+function toggleLogic(force){
+  const p=$("logicPanel"), show=force!==undefined?force:p.classList.contains("hidden");
+  p.classList.toggle("hidden",!show);
+  $("sheetBackdrop").classList.toggle("hidden",!show);
+}
+$("logicBtn").onclick=()=>toggleLogic();
+$("sheetBackdrop").onclick=()=>toggleLogic(false);
+$("logicClose").onclick=()=>toggleLogic(false);
 $("startMixedBtn").onclick=()=>startStudy(selectedLevels);
 $("sessionSize").onchange=()=>{settings.sessionSize=$("sessionSize").value;saveSettings();};
 $("backBtn").onclick=exitStudy;
 $("homeBtn").onclick=()=>{stopSpeech();showView("homeView");renderHome()};
-$("shuffleBtn").onclick=()=>{session.sort(()=>Math.random()-.5);current=0;renderCard()};
+$("shuffleBtn").onclick=()=>{session.sort(()=>Math.random()-.5);current=0;snapshots={};sessionGrades=[];renderCard()};
 
-// Click the Chinese word / example to hear it (without flipping the card).
-$("word").addEventListener("click",e=>{e.stopPropagation();speakWord()});
-$("example").addEventListener("click",e=>{e.stopPropagation();speakExample()});
+// Click the Chinese word / example to hear it (without flipping the card, and not after a drag).
+$("word").addEventListener("click",e=>{e.stopPropagation(); if(suppressClick){suppressClick=false;return;} speakWord();});
+$("example").addEventListener("click",e=>{e.stopPropagation(); if(suppressClick){suppressClick=false;return;} speakExample();});
 
 $("speakWordBtn").onclick=e=>{e.stopPropagation();speakWord()};
 $("speakExampleBtn").onclick=e=>{e.stopPropagation();speakExample()};
@@ -315,5 +391,11 @@ if(!speech.supported){
 $("resetBtn").onclick=()=>{if(confirm("Xóa toàn bộ tiến độ học?")){progress={};save();renderHome();}};
 $("themeBtn").onclick=()=>{document.body.classList.toggle("dark");settings.dark=document.body.classList.contains("dark");saveSettings();};
 if(settings.dark)document.body.classList.add("dark");
+// Lock the study screen to the real visible height (robust dvh alternative for iOS/dynamic toolbars).
+function setAppHeight(){ document.documentElement.style.setProperty("--app-h", window.innerHeight+"px"); }
+setAppHeight();
+window.addEventListener("resize", setAppHeight);
+window.addEventListener("orientationchange", setAppHeight);
+
 if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 renderHome();

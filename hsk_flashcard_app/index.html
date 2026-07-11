@@ -142,7 +142,8 @@
           <button id="nextBtn" class="secondary-btn hidden">Bỏ qua chấm điểm · Next</button>
           <button id="logicBtn" class="text-btn">Các mức này nghĩa là gì?</button>
         </div>
-        <div id="logicPanel" class="logic-panel hidden">
+        <div id="logicPanel" class="logic-panel hidden" role="dialog" aria-label="Giải thích mức độ nhớ">
+          <button id="logicClose" class="sheet-close" type="button" aria-label="Đóng">✕</button>
           <strong>Cách hoạt động</strong>
           <p><b>Chưa nhớ:</b> xem lại rất sớm trong phiên học.</p>
           <p><b>Khó:</b> ôn lại sau khoảng 1 ngày.</p>
@@ -150,6 +151,7 @@
           <p><b>Rất dễ:</b> ôn lại sau khoảng 7 ngày.</p>
           <p>Khoảng cách sẽ tăng dần khi bạn tiếp tục nhớ đúng ở những lần sau.</p>
         </div>
+        <div id="sheetBackdrop" class="sheet-backdrop hidden"></div>
 
         <div id="flipHint" class="study-hint">Bấm vào thẻ để lật</div>
         <div class="kbd-hint" aria-hidden="true">

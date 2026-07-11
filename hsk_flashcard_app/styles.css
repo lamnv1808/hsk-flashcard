@@ -114,3 +114,59 @@ kbd{display:inline-block;min-width:20px;text-align:center;padding:2px 6px;border
   .speaking-dots i{animation:none;opacity:1}
   .card-face{transition:none}
 }
+
+/* ---------- v4: swipe/drag navigation + one-screen mobile study ---------- */
+/* Drag follows the pointer; snaps back via transition. Flip animation lives on the faces, unaffected. */
+.flashcard{cursor:grab;touch-action:pan-y;user-select:none;-webkit-user-select:none;-webkit-user-drag:none;transform:translateX(var(--drag-x,0));transition:transform .28s ease}
+.flashcard.dragging{cursor:grabbing;transition:none}
+@media(prefers-reduced-motion:reduce){.flashcard{transition:none}}
+
+/* Bottom-sheet backdrop + close button (mobile only; hidden on desktop) */
+.sheet-backdrop{display:none}
+.sheet-close{display:none}
+
+@media(max-width:720px){
+  /* One-screen study: fill the viewport, no page scrolling */
+  body.studying{overflow:hidden}
+  body.studying .app-shell{padding:0;width:100%}
+  body.studying .topbar{display:none}   /* study view has its own header; reclaim the space */
+  #studyView.active{
+    display:flex;flex-direction:column;gap:8px;
+    height:100vh;height:100dvh;height:var(--app-h,100dvh);   /* --app-h (JS) = real innerHeight; robust on iOS */
+    overflow:hidden;
+    padding:calc(env(safe-area-inset-top) + 8px) 12px calc(env(safe-area-inset-bottom) + 8px);
+  }
+  body.studying .study-head{margin:0}
+  body.studying .progress-track{margin:0}
+
+  /* Flashcard fills the remaining height instead of a large fixed height */
+  body.studying .flashcard{flex:1 1 auto;height:auto;min-height:0}
+  body.studying .card-face{padding:18px;overflow:hidden}
+  body.studying .word{font-size:clamp(46px,14vw,84px)}   /* stays large & readable */
+  body.studying .badge{top:14px;left:14px}
+  body.studying .tap-hint{bottom:12px}
+
+  /* Audio controls: compact 2x2 grid, >=44px touch targets */
+  body.studying .speech-bar{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:0}
+  body.studying .speech-btn{min-height:44px;flex:none;padding:8px 6px}
+  body.studying .speaking-indicator{grid-column:1/-1;margin:0}
+
+  /* Rating: 2x2, always in-viewport, >=48px */
+  body.studying .rating-area{grid-template-columns:1fr 1fr;gap:8px;margin:0}
+  body.studying .rate{min-height:48px;padding:8px 6px}
+  body.studying .rate strong{font-size:14px}
+  body.studying .rate span{font-size:10px;margin-top:1px}
+
+  /* Compact actions; hints must not permanently take space */
+  body.studying .study-actions{margin:0;gap:8px}
+  body.studying .secondary-btn{min-height:44px}
+  body.studying #flipHint{display:none}
+
+  /* Long explanation becomes a bottom sheet (no permanent space in the flow) */
+  .sheet-backdrop{display:block;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:40}
+  .sheet-backdrop.hidden{display:none}
+  #logicPanel{position:fixed;left:0;right:0;bottom:0;top:auto;max-width:none;margin:0;z-index:41;border-radius:20px 20px 0 0;max-height:70vh;overflow:auto;padding-bottom:calc(env(safe-area-inset-bottom) + 18px);animation:sheetUp .3s ease}
+  #logicPanel.hidden{display:none}   /* fully removed when closed -> no phantom scroll height */
+  @keyframes sheetUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
+  .sheet-close{display:block;position:absolute;top:10px;right:12px;width:34px;height:34px;border-radius:50%;border:1px solid var(--line);background:var(--panel);color:var(--text);font-weight:800;cursor:pointer}
+}

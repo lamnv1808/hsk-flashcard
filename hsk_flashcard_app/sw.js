@@ -1,5 +1,5 @@
 
-const CACHE='hsk-flashcards-v3';
+const CACHE='hsk-flashcards-v4';
 const ASSETS=[
   './','index.html','styles.css','app.js','data.js','manifest.webmanifest',
   'icons/icon-192.png','icons/icon-512.png','icons/icon-maskable-512.png',
