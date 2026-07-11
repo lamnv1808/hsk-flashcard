@@ -2,10 +2,18 @@
 <html lang="vi">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="theme-color" content="#b91c1c" />
+  <meta name="description" content="Học từ vựng HSK1–HSK4 bằng flashcard, có phát âm tiếng Trung và lịch ôn spaced repetition." />
   <title>Flashcard tiếng Trung HSK1–HSK4</title>
   <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon-180.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="HSK Flashcards" />
+  <meta name="mobile-web-app-capable" content="yes" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -15,7 +23,10 @@
         <div class="eyebrow">FLASHCARD TIẾNG TRUNG</div>
         <h1>HSK1–HSK4</h1>
       </div>
-      <button id="themeBtn" class="icon-btn" aria-label="Đổi giao diện">◐</button>
+      <div class="topbar-actions">
+        <button id="installBtn" class="install-btn" type="button" hidden aria-label="Cài đặt ứng dụng">⤓ <span>Cài đặt</span></button>
+        <button id="themeBtn" class="icon-btn" type="button" aria-label="Đổi giao diện sáng/tối">◐</button>
+      </div>
     </header>
 
     <main>
@@ -58,6 +69,23 @@
 
         <div id="deckGrid" class="deck-grid"></div>
 
+        <div class="section-title">
+          <h3>Âm thanh</h3>
+        </div>
+        <div id="speechSettings" class="speech-settings">
+          <div class="speech-setting">
+            <label class="config-label" for="speechRate">Tốc độ đọc</label>
+            <select id="speechRate" class="select-control">
+              <option value="0.7">0.7x (chậm)</option>
+              <option value="0.85">0.85x</option>
+              <option value="1">1x (thường)</option>
+            </select>
+          </div>
+          <label class="switch-row"><input type="checkbox" id="autoReadWord" /><span>Tự đọc từ khi hiện thẻ mới</span></label>
+          <label class="switch-row"><input type="checkbox" id="autoReadExample" /><span>Tự đọc ví dụ sau khi lật thẻ</span></label>
+          <p id="speechUnsupported" class="muted speech-note">Trình duyệt này không hỗ trợ đọc audio (SpeechSynthesis).</p>
+        </div>
+
         <div class="stats-grid">
           <div class="stat-card"><span>Đã học</span><strong id="learnedStat">0</strong></div>
           <div class="stat-card"><span>Chuỗi ngày</span><strong id="streakStat">0</strong></div>
@@ -65,34 +93,43 @@
         </div>
       </section>
 
-      <section id="studyView" class="view">
+      <section id="studyView" class="view" aria-label="Phiên học flashcard">
         <div class="study-head">
-          <button id="backBtn" class="icon-btn">←</button>
+          <button id="backBtn" class="icon-btn" type="button" aria-label="Thoát phiên học (Esc)">←</button>
           <div>
             <div id="studyLevel" class="eyebrow"></div>
             <strong><span id="cardIndex">1</span>/<span id="cardTotal">1</span></strong>
           </div>
-          <button id="shuffleBtn" class="icon-btn">⤨</button>
+          <button id="shuffleBtn" class="icon-btn" type="button" aria-label="Xáo trộn thẻ">⤨</button>
         </div>
 
         <div class="progress-track"><div id="progressBar"></div></div>
 
-        <button id="flashcard" class="flashcard" aria-label="Lật thẻ">
+        <button id="flashcard" class="flashcard" type="button" aria-label="Thẻ từ vựng. Bấm hoặc nhấn Space để lật.">
           <div class="card-face card-front">
             <span id="levelBadge" class="badge"></span>
-            <div id="word" class="word"></div>
+            <div id="word" class="word readable" title="Bấm để nghe phát âm"></div>
             <div id="pinyin" class="pinyin"></div>
-            <div class="tap-hint">Chạm để xem đáp án</div>
+            <div class="tap-hint">Chạm để xem đáp án · bấm từ để nghe</div>
           </div>
           <div class="card-face card-back">
             <span class="label">Nghĩa</span>
             <div id="meaning" class="meaning"></div>
             <div class="divider"></div>
-            <div id="example" class="example"></div>
+            <div id="example" class="example readable" title="Bấm để nghe phát âm"></div>
             <div id="examplePinyin" class="example-pinyin"></div>
             <div id="translation" class="translation"></div>
           </div>
         </button>
+
+        <div id="speechBar" class="speech-bar">
+          <button id="speakWordBtn" type="button" class="speech-btn" aria-label="Đọc từ vựng bằng tiếng Trung">🔊 <span>Từ</span></button>
+          <button id="speakExampleBtn" type="button" class="speech-btn" aria-label="Đọc câu ví dụ bằng tiếng Trung">🔊 <span>Ví dụ</span></button>
+          <button id="readAllBtn" type="button" class="speech-btn" aria-label="Đọc từ vựng rồi câu ví dụ">▶ <span>Đọc tất cả</span></button>
+          <button id="stopSpeechBtn" type="button" class="speech-btn danger" aria-label="Dừng đọc">■ <span>Dừng</span></button>
+          <span id="speakingIndicator" class="speaking-indicator" aria-hidden="true"><span class="speaking-dots"><i></i><i></i><i></i></span> Đang đọc</span>
+        </div>
+        <div id="srStatus" class="sr-only" aria-live="polite"></div>
 
         <div id="ratingArea" class="rating-area hidden">
           <button data-grade="again" class="rate again" title="Bạn chưa nhớ. Thẻ sẽ quay lại rất sớm."><strong>Chưa nhớ</strong><span>Ôn lại sớm</span></button>
@@ -115,6 +152,13 @@
         </div>
 
         <div id="flipHint" class="study-hint">Bấm vào thẻ để lật</div>
+        <div class="kbd-hint" aria-hidden="true">
+          <span><kbd>Space</kbd> Lật</span>
+          <span><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd> Chấm điểm</span>
+          <span><kbd>N</kbd> Bỏ qua</span>
+          <span><kbd>S</kbd> Nghe</span>
+          <span><kbd>Esc</kbd> Thoát</span>
+        </div>
       </section>
 
       <section id="completeView" class="view complete">
