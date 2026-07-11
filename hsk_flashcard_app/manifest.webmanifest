@@ -1,0 +1,9 @@
+{
+  "name": "Flashcard tiếng Trung HSK1–HSK4",
+  "short_name": "HSK Flashcards",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f8f5ef",
+  "theme_color": "#b91c1c",
+  "icons": []
+}

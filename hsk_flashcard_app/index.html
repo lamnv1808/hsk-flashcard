@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#b91c1c" />
+  <title>Flashcard tiếng Trung HSK1–HSK4</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">FLASHCARD TIẾNG TRUNG</div>
+        <h1>HSK1–HSK4</h1>
+      </div>
+      <button id="themeBtn" class="icon-btn" aria-label="Đổi giao diện">◐</button>
+    </header>
+
+    <main>
+      <section id="homeView" class="view active">
+        <div class="hero">
+          <div>
+            <p class="hero-kicker">Học theo nhịp nhớ của bạn</p>
+            <h2>1.194 từ vựng, học từng ngày.</h2>
+            <p class="muted">Chọn cấp độ, lật thẻ và tự chấm mức độ nhớ.</p>
+          </div>
+          <div class="hero-stat">
+            <strong id="dueCount">0</strong>
+            <span>thẻ cần ôn hôm nay</span>
+          </div>
+        </div>
+
+        <div class="section-title">
+          <h3>Chọn bộ học</h3>
+          <button id="resetBtn" class="text-btn">Xóa tiến độ</button>
+        </div>
+
+        <div class="study-config">
+          <div>
+            <div class="config-label">Cấp độ</div>
+            <div id="levelPicker" class="level-picker"></div>
+          </div>
+          <div>
+            <label class="config-label" for="sessionSize">Số thẻ mỗi phiên</label>
+            <select id="sessionSize" class="select-control">
+              <option value="10">10 thẻ</option>
+              <option value="20" selected>20 thẻ</option>
+              <option value="30">30 thẻ</option>
+              <option value="50">50 thẻ</option>
+              <option value="100">100 thẻ</option>
+              <option value="all">Tất cả thẻ đến hạn</option>
+            </select>
+          </div>
+          <button id="startMixedBtn" class="primary-btn start-btn">Bắt đầu học</button>
+        </div>
+
+        <div id="deckGrid" class="deck-grid"></div>
+
+        <div class="stats-grid">
+          <div class="stat-card"><span>Đã học</span><strong id="learnedStat">0</strong></div>
+          <div class="stat-card"><span>Chuỗi ngày</span><strong id="streakStat">0</strong></div>
+          <div class="stat-card"><span>Tỷ lệ nhớ</span><strong id="retentionStat">0%</strong></div>
+        </div>
+      </section>
+
+      <section id="studyView" class="view">
+        <div class="study-head">
+          <button id="backBtn" class="icon-btn">←</button>
+          <div>
+            <div id="studyLevel" class="eyebrow"></div>
+            <strong><span id="cardIndex">1</span>/<span id="cardTotal">1</span></strong>
+          </div>
+          <button id="shuffleBtn" class="icon-btn">⤨</button>
+        </div>
+
+        <div class="progress-track"><div id="progressBar"></div></div>
+
+        <button id="flashcard" class="flashcard" aria-label="Lật thẻ">
+          <div class="card-face card-front">
+            <span id="levelBadge" class="badge"></span>
+            <div id="word" class="word"></div>
+            <div id="pinyin" class="pinyin"></div>
+            <div class="tap-hint">Chạm để xem đáp án</div>
+          </div>
+          <div class="card-face card-back">
+            <span class="label">Nghĩa</span>
+            <div id="meaning" class="meaning"></div>
+            <div class="divider"></div>
+            <div id="example" class="example"></div>
+            <div id="examplePinyin" class="example-pinyin"></div>
+            <div id="translation" class="translation"></div>
+          </div>
+        </button>
+
+        <div id="ratingArea" class="rating-area hidden">
+          <button data-grade="again" class="rate again" title="Bạn chưa nhớ. Thẻ sẽ quay lại rất sớm."><strong>Chưa nhớ</strong><span>Ôn lại sớm</span></button>
+          <button data-grade="hard" class="rate hard" title="Bạn nhớ khá khó khăn. Thẻ sẽ quay lại sau thời gian ngắn."><strong>Khó</strong><span>Khoảng 1 ngày</span></button>
+          <button data-grade="good" class="rate good" title="Bạn nhớ được bình thường. Đây là lựa chọn mặc định."><strong>Nhớ được</strong><span>Khoảng 3 ngày</span></button>
+          <button data-grade="easy" class="rate easy" title="Bạn nhớ rất chắc. Thẻ sẽ quay lại muộn hơn."><strong>Rất dễ</strong><span>Khoảng 7 ngày</span></button>
+        </div>
+
+        <div class="study-actions">
+          <button id="nextBtn" class="secondary-btn hidden">Bỏ qua chấm điểm · Next</button>
+          <button id="logicBtn" class="text-btn">Các mức này nghĩa là gì?</button>
+        </div>
+        <div id="logicPanel" class="logic-panel hidden">
+          <strong>Cách hoạt động</strong>
+          <p><b>Chưa nhớ:</b> xem lại rất sớm trong phiên học.</p>
+          <p><b>Khó:</b> ôn lại sau khoảng 1 ngày.</p>
+          <p><b>Nhớ được:</b> ôn lại sau khoảng 3 ngày.</p>
+          <p><b>Rất dễ:</b> ôn lại sau khoảng 7 ngày.</p>
+          <p>Khoảng cách sẽ tăng dần khi bạn tiếp tục nhớ đúng ở những lần sau.</p>
+        </div>
+
+        <div id="flipHint" class="study-hint">Bấm vào thẻ để lật</div>
+      </section>
+
+      <section id="completeView" class="view complete">
+        <div class="complete-icon">✓</div>
+        <h2>Hoàn thành phiên học</h2>
+        <p id="completeText" class="muted"></p>
+        <button id="homeBtn" class="primary-btn">Về trang chủ</button>
+      </section>
+    </main>
+  </div>
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
