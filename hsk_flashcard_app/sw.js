@@ -1,8 +1,8 @@
 
-const CACHE='hsk-flashcards-v8';
+const CACHE='hsk-flashcards-v9';
 const ASSETS=[
   './','index.html','styles.css','app.js','data.js','manifest.webmanifest',
-  'supabase-config.js','auth.js','sync.js','test.js',
+  'supabase-config.js','auth.js','sync.js','test.js','metadata.js','insights.js',
   'icons/icon-192.png','icons/icon-512.png','icons/icon-maskable-512.png',
   'icons/apple-touch-icon-180.png','icons/favicon-32.png'
 ];

@@ -18,6 +18,7 @@ h1,h2,h3,p{margin-top:0}.topbar h1{margin:0;font-size:28px}.eyebrow{font-size:12
 #progressBar{height:100%;background:var(--accent);width:0;transition:.25s}.flashcard{position:relative;width:100%;height:480px;border:0;background:transparent;perspective:1400px;cursor:pointer;padding:0}
 .card-face{position:absolute;inset:0;border:1px solid var(--line);background:var(--panel);border-radius:30px;box-shadow:var(--shadow);backface-visibility:hidden;transition:transform .55s;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:34px}
 .card-back{transform:rotateY(180deg)}.flashcard.flipped .card-front{transform:rotateY(180deg)}.flashcard.flipped .card-back{transform:rotateY(360deg)}
+.flashcard.no-flip-anim .card-face{transition:none}/* P0: instant flip reset on card change so the back never flashes the next answer */
 .badge{position:absolute;top:24px;left:24px;background:#fee2e2;color:#991b1b;padding:7px 11px;border-radius:99px;font-size:12px;font-weight:800}.word{font-size:clamp(56px,12vw,100px);font-weight:800;line-height:1.15}
 .pinyin{font-size:25px;color:var(--muted);margin-top:16px}.tap-hint{position:absolute;bottom:24px;color:var(--muted);font-size:13px}.label{font-size:12px;letter-spacing:.15em;color:var(--muted);font-weight:800}
 .meaning{font-size:32px;font-weight:750;margin:10px 0 20px}.divider{height:1px;width:100%;background:var(--line);margin:8px 0 24px}.example{font-size:32px;font-weight:700;text-align:center}
@@ -288,6 +289,68 @@ body.auth-locked{overflow:hidden}
   .test-option{min-height:52px}
   .test-config{grid-template-columns:1fr}
   .test-types{grid-template-columns:1fr}
+}
+
+/* ============ Insights / Bookmarks / Notes (additive) ============ */
+.study-head-3{grid-template-columns:44px 1fr auto}
+.study-head-actions{display:flex;gap:8px}
+.bookmark-btn{font-size:20px;line-height:1}
+.bookmark-btn.active{color:var(--accent);border-color:var(--accent)}
+.bookmark-btn:disabled{opacity:.4}
+
+/* Home feature entry buttons */
+.feature-cta-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:18px}
+.feature-cta{width:100%}
+
+/* Feature views: filters, study button, word list */
+.feature-filters{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:6px 0 12px}
+.feature-study-btn{width:100%;margin-bottom:8px}
+.empty-state{text-align:center;padding:26px 8px}
+.word-list{display:flex;flex-direction:column;gap:8px;margin-top:6px}
+.word-row{display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:11px 14px}
+.word-row-main{flex:1;min-width:0}
+.wr-word{font-size:22px;font-weight:800;margin-right:8px}
+.wr-py{color:var(--muted);font-size:15px}
+.wr-mean{font-size:15px;overflow-wrap:anywhere;margin-top:2px}
+.wr-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px;font-size:12px;color:var(--muted)}
+.wr-lvl{font-weight:800;color:var(--accent)}
+.wr-remove{flex:0 0 auto;width:34px;height:34px;border-radius:10px;border:1px solid var(--line);background:var(--panel);color:var(--muted);cursor:pointer}
+.wr-remove:hover{border-color:#dc2626;color:#dc2626}
+
+/* Smart Review insight rows + chart */
+.insight-row{display:flex;justify-content:space-between;gap:12px;padding:11px 0;border-bottom:1px solid var(--line)}
+.insight-row span{color:var(--muted)}
+.insight-row b{text-align:right;overflow-wrap:anywhere}
+.chart-range{display:flex;gap:8px;margin-bottom:8px}
+.chip-btn{border:1px solid var(--line);background:var(--panel);color:var(--muted);padding:6px 14px;border-radius:999px;font-weight:700;cursor:pointer}
+.chip-btn.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.daily-chart{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:10px}
+.chart-summary{font-size:13px;margin-top:8px}
+
+/* Back-side note zone (between card and audio controls). Empty note = only the icon. */
+.note-zone{margin:10px 0 0}
+.note-zone[hidden]{display:none}
+.note-row{display:flex;align-items:flex-start;gap:8px}
+.note-display{flex:1;min-width:0;white-space:pre-wrap;overflow-wrap:anywhere;max-height:120px;overflow:auto;
+  background:var(--panel);border:1px dashed var(--line);border-radius:12px;padding:8px 12px;font-size:14px;color:var(--text)}
+.note-display[hidden]{display:none}
+.note-toggle{margin-left:auto;flex:0 0 auto;width:36px;height:36px;border-radius:10px;border:1px solid var(--line);
+  background:var(--panel);color:var(--text);cursor:pointer;font-size:16px;line-height:1}
+.note-toggle.has-note{border-color:var(--accent)}
+.note-editor{margin-top:8px}
+.note-editor[hidden]{display:none}
+.note-input{width:100%;box-sizing:border-box;border:1px solid var(--line);background:var(--bg);color:var(--text);
+  border-radius:12px;padding:10px 12px;font:inherit;font-size:15px;resize:vertical;min-height:64px}
+.note-input:focus{outline:none;border-color:var(--accent)}
+.note-editor-bar{display:flex;align-items:center;gap:8px;margin-top:6px}
+.note-counter{margin-right:auto;color:var(--muted);font-size:12px}
+.note-btn{min-height:40px;padding:8px 16px}
+
+@media(max-width:720px){
+  .feature-cta-grid{grid-template-columns:1fr}
+  .feature-filters{grid-template-columns:1fr}
+  .note-display{max-height:96px}
+  body.studying .note-zone{margin:6px 0 0}
 }
 
 /* ---------- v4: swipe/drag navigation + one-screen mobile study ---------- */

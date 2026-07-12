@@ -205,8 +205,16 @@ function applyPinyinDisplay(){
 
 function renderCard(){
   if(current>=session.length) return finishSession();
-  const c=session[current]; flipped=false;
-  $("flashcard").classList.remove("flipped");
+  const c=session[current];
+  const fc=$("flashcard");
+  // P0 answer-leak fix: reset the flip WITHOUT the un-flip animation, so the back
+  // face never rotates through a viewer-facing angle while it already holds the
+  // next card's answer. Disable the face transition, drop .flipped + write the new
+  // content on the front, force a reflow so it applies instantly, then re-enable the
+  // transition for user-initiated flips.
+  fc.classList.add("no-flip-anim");
+  flipped=false;
+  fc.classList.remove("flipped");
   $("ratingArea").classList.add("hidden");
   $("nextBtn").classList.add("hidden");
   $("logicPanel").classList.add("hidden");
@@ -220,6 +228,9 @@ function renderCard(){
   // Front vocab pinyin (column C) shows on the front by default; when disabled it moves to the back.
   $("backWord").textContent=c.word; $("backPinyin").textContent=c.pinyin;
   applyPinyinDisplay();
+  if(window.HSKMeta) HSKMeta.syncCard();   // bookmark state + hide note zone (front)
+  void fc.offsetWidth;                     // force reflow: front + new content painted with no animation
+  fc.classList.remove("no-flip-anim");     // restore the flip animation for the next user flip
   $("flashcard").setAttribute("aria-label",`Thẻ ${current+1}/${session.length}. Từ: ${c.word}. Bấm hoặc nhấn Space để xem nghĩa.`);
   $("srStatus").textContent=`Thẻ ${current+1} trên ${session.length}. ${c.level}: ${c.word}.`;
   stopSpeech();                       // always stop audio when the card changes
@@ -238,6 +249,7 @@ function flipCard(){
     $("srStatus").textContent=flipped?`Nghĩa: ${c.meaning}.`:`Từ: ${c.word}.`;
   }
   if(flipped){ stopSpeech(); if(settings.autoReadExample) speakExample(); } else stopSpeech();
+  if(window.HSKMeta) HSKMeta.onFlip(flipped);   // note zone shows only on the back side
 }
 
 // Per-session-index undo history so revisiting a card can't double-count SRS.
@@ -256,6 +268,7 @@ function revertSnapshot(index){
 }
 
 function gradeCard(grade){
+  if(!flipped) return;             // guard: only grade a flipped card -> blocks double-grade / rapid repeats
   const c=session[current];
   captureSnapshot(current,c.id);   // remember pre-grade state (once per position)
   revertSnapshot(current);         // undo any earlier grade at this position before re-applying
@@ -284,6 +297,7 @@ function gradeCard(grade){
   if(grade==="good"||grade==="easy") s.correct=(s.correct||0)+1;
   progress[c.id]=s; save();
   if(window.HSKSync) HSKSync.markDirty(c.id);   // queue only this card for cloud sync
+  if(window.HSKMeta) HSKMeta.recordDailyLearn(c.id);   // daily-learning chart (Study Mode grades only)
   sessionGrades[current]=grade;    // index-addressed: re-grading overwrites, never duplicates
   current++; renderCard();
 }
@@ -433,6 +447,20 @@ window.HSK_APP = {
   keys(){ return { stateKey, settingsKey }; },
   getProgress(){ return progress; },
   getSettings(){ return settings; },
+  cards(){ return cards; },
+  levels(){ return LEVELS; },
+  // Start a normal Study Mode session from an explicit, de-duplicated list of card IDs
+  // (used by "Ôn các từ này" / "Học các từ đã lưu"). Reuses the existing renderer, audio,
+  // grading and SRS exactly.
+  startSession(ids){
+    const byId = new Map(cards.map(c=>[c.id,c]));
+    const list=[]; const seen=new Set();
+    (ids||[]).forEach(id=>{ const c=byId.get(id); if(c && !seen.has(c.id)){ seen.add(c.id); list.push(c); } });
+    if(!list.length) return false;
+    session=list; current=0; sessionGrades=[]; snapshots={};
+    updateStreak(); showView("studyView"); renderCard();
+    return true;
+  },
   // Re-read localStorage into memory after a cloud pull merges new data.
   // Never disrupts an active study session.
   reloadState(){

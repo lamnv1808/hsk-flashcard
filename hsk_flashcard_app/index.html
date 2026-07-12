@@ -69,6 +69,12 @@
 
         <button id="openTestBtn" class="secondary-btn test-cta" type="button">📝 Bài test — Trắc nghiệm</button>
 
+        <div class="feature-cta-grid">
+          <button id="openWeakBtn" class="secondary-btn feature-cta" type="button">🎯 Từ cần cải thiện</button>
+          <button id="openInsightsBtn" class="secondary-btn feature-cta" type="button">📊 Phân tích học tập</button>
+          <button id="openBookmarksBtn" class="secondary-btn feature-cta" type="button">⭐ Từ đã lưu</button>
+        </div>
+
         <div id="deckGrid" class="deck-grid"></div>
 
         <div class="section-title">
@@ -105,13 +111,16 @@
       </section>
 
       <section id="studyView" class="view" aria-label="Phiên học flashcard">
-        <div class="study-head">
+        <div class="study-head study-head-3">
           <button id="backBtn" class="icon-btn" type="button" aria-label="Thoát phiên học (Esc)">←</button>
           <div>
             <div id="studyLevel" class="eyebrow"></div>
             <strong><span id="cardIndex">1</span>/<span id="cardTotal">1</span></strong>
           </div>
-          <button id="shuffleBtn" class="icon-btn" type="button" aria-label="Xáo trộn thẻ">⤨</button>
+          <div class="study-head-actions">
+            <button id="bookmarkBtn" class="icon-btn bookmark-btn" type="button" aria-pressed="false" aria-label="Lưu từ này">☆</button>
+            <button id="shuffleBtn" class="icon-btn" type="button" aria-label="Xáo trộn thẻ">⤨</button>
+          </div>
         </div>
 
         <div class="progress-track"><div id="progressBar"></div></div>
@@ -136,6 +145,22 @@
             <div id="translation" class="translation"></div>
           </div>
         </button>
+
+        <div id="noteZone" class="note-zone" hidden>
+          <div class="note-row">
+            <button id="noteToggle" class="note-toggle" type="button" aria-expanded="false" aria-label="Ghi chú cá nhân">📝</button>
+            <div id="noteDisplay" class="note-display" hidden></div>
+          </div>
+          <div id="noteEditor" class="note-editor" hidden>
+            <label class="sr-only" for="noteInput">Ghi chú cá nhân cho thẻ này</label>
+            <textarea id="noteInput" class="note-input" maxlength="1000" rows="3" placeholder="Ghi chú của bạn…"></textarea>
+            <div class="note-editor-bar">
+              <span id="noteCounter" class="note-counter" aria-live="polite"></span>
+              <button id="noteCancel" class="secondary-btn note-btn" type="button">Hủy</button>
+              <button id="noteSave" class="primary-btn note-btn" type="button">Lưu</button>
+            </div>
+          </div>
+        </div>
 
         <div id="speechBar" class="speech-bar">
           <button id="speakWordBtn" type="button" class="speech-btn" aria-label="Đọc từ vựng bằng tiếng Trung">🔊 <span>Từ</span></button>
@@ -290,6 +315,69 @@
         </div>
         <div id="testReviewList" class="test-review-list"></div>
       </section>
+
+      <!-- ============ Weak Words ============ -->
+      <section id="weakWordsView" class="view" aria-label="Từ cần cải thiện">
+        <div class="study-head">
+          <button id="weakBack" class="icon-btn" type="button" aria-label="Về trang chủ">←</button>
+          <div><div class="eyebrow">PHÂN TÍCH</div><strong>Từ cần cải thiện</strong></div>
+          <span class="head-spacer" aria-hidden="true"></span>
+        </div>
+        <div class="feature-filters">
+          <div>
+            <label class="config-label" for="weakLevel">Cấp độ</label>
+            <select id="weakLevel" class="select-control"></select>
+          </div>
+          <div>
+            <label class="config-label" for="weakTop">Số lượng</label>
+            <select id="weakTop" class="select-control">
+              <option value="10">Top 10</option>
+              <option value="20" selected>Top 20</option>
+              <option value="50">Top 50</option>
+            </select>
+          </div>
+        </div>
+        <button id="weakStudyBtn" class="primary-btn feature-study-btn" type="button">Ôn các từ này</button>
+        <div id="weakList" class="word-list"></div>
+      </section>
+
+      <!-- ============ Smart Review / Insights ============ -->
+      <section id="insightsView" class="view" aria-label="Phân tích học tập">
+        <div class="study-head">
+          <button id="insightsBack" class="icon-btn" type="button" aria-label="Về trang chủ">←</button>
+          <div><div class="eyebrow">PHÂN TÍCH</div><strong>Phân tích học tập</strong></div>
+          <span class="head-spacer" aria-hidden="true"></span>
+        </div>
+        <div id="insightsBody"></div>
+        <div class="section-title"><h3>Số từ đã học mỗi ngày</h3></div>
+        <div class="chart-range">
+          <button id="chart7" class="chip-btn active" type="button">7 ngày</button>
+          <button id="chart30" class="chip-btn" type="button">30 ngày</button>
+        </div>
+        <div id="dailyChart" class="daily-chart" role="img" aria-label="Biểu đồ số từ đã học mỗi ngày"></div>
+        <p id="dailyChartSummary" class="muted chart-summary"></p>
+      </section>
+
+      <!-- ============ Bookmarks ============ -->
+      <section id="bookmarksView" class="view" aria-label="Từ đã lưu">
+        <div class="study-head">
+          <button id="bmBack" class="icon-btn" type="button" aria-label="Về trang chủ">←</button>
+          <div><div class="eyebrow">TỪ VỰNG</div><strong>Từ đã lưu</strong></div>
+          <span class="head-spacer" aria-hidden="true"></span>
+        </div>
+        <div class="feature-filters">
+          <div>
+            <label class="config-label" for="bmLevel">Cấp độ</label>
+            <select id="bmLevel" class="select-control"></select>
+          </div>
+          <div>
+            <label class="config-label" for="bmSearch">Tìm kiếm</label>
+            <input id="bmSearch" class="select-control" type="search" placeholder="từ, pinyin, nghĩa…" />
+          </div>
+        </div>
+        <button id="bmStudyBtn" class="primary-btn feature-study-btn" type="button">Học các từ đã lưu</button>
+        <div id="bmList" class="word-list"></div>
+      </section>
     </main>
   </div>
   <script src="data.js"></script>
@@ -298,5 +386,7 @@
   <script src="app.js"></script>
   <script src="sync.js"></script>
   <script src="test.js"></script>
+  <script src="metadata.js"></script>
+  <script src="insights.js"></script>
 </body>
 </html>
