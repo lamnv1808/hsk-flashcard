@@ -1,5 +1,6 @@
 
 const cards = window.HSK_CARDS || [];
+const cardRepo = window.HSKUtil.cards;   // read-only CardRepository over the same source (built once)
 // All HSK levels present in the data, ordered by numeric suffix.
 // Auto-detected from the cards, so adding HSK5/HSK6 (or later HSK7…) needs no code change.
 const LEVELS = window.HSKUtil.levels.levelsFromCards(cards);
@@ -120,7 +121,7 @@ function dueCards(levels){
   const now=today();
   return cards.filter(c=>levels.includes(c.level) && getCardState(c.id).due<=now);
 }
-function levelCards(level){ return cards.filter(c=>c.level===level); }
+function levelCards(level){ return cardRepo.getByLevel(level); }
 
 function renderLevelPicker(){
   const wrap=$("levelPicker"); wrap.innerHTML="";
@@ -148,7 +149,7 @@ function renderHome(){
   $("autoReadWord").checked=!!settings.autoReadWord;
   $("autoReadExample").checked=!!settings.autoReadExample;
   $("showFrontPinyin").checked=settings.showFrontPinyin!==false;   // default on
-  $("totalWords").textContent=cards.length.toLocaleString("vi-VN");   // total vocab count, automatic
+  $("totalWords").textContent=cardRepo.count().toLocaleString("vi-VN");   // total vocab count, automatic
   const grid=$("deckGrid"); grid.innerHTML="";
   LEVELS.forEach(level=>{
     const all=levelCards(level), learned=all.filter(c=>getCardState(c.id).reps>0).length, due=dueCards([level]).length;
@@ -453,9 +454,8 @@ window.HSK_APP = {
   // (used by "Ôn các từ này" / "Học các từ đã lưu"). Reuses the existing renderer, audio,
   // grading and SRS exactly.
   startSession(ids){
-    const byId = window.HSKUtil.cardIndex.buildCardById(cards);
     const list=[]; const seen=new Set();
-    (ids||[]).forEach(id=>{ const c=byId.get(id); if(c && !seen.has(c.id)){ seen.add(c.id); list.push(c); } });
+    (ids||[]).forEach(id=>{ const c=cardRepo.getById(id); if(c && !seen.has(c.id)){ seen.add(c.id); list.push(c); } });
     if(!list.length) return false;
     session=list; current=0; sessionGrades=[]; snapshots={};
     // Deactivate any non-core view (Weak Words / Bookmarks / etc.) before entering

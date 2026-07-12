@@ -7,7 +7,7 @@
   "use strict";
   var $ = function (id) { return document.getElementById(id); };
   var CARDS = window.HSK_CARDS || [];
-  var BY = window.HSKUtil.cardIndex.buildCardById(CARDS);
+  var repo = window.HSKUtil.cards;   // shared read-only CardRepository (built once)
   var LEVELS = window.HSKUtil.levels.levelsFromCards(CARDS);
   function P() { return (window.HSK_APP && window.HSK_APP.getProgress()) || {}; }
   function trim(x) { return String(x == null ? "" : x).trim(); }
@@ -42,7 +42,7 @@
   function weakCards(levelFilter) {
     var prog = P(), out = [];
     Object.keys(prog).forEach(function (id) {
-      var card = BY.get(Number(id)); if (!card) return;
+      var card = repo.getById(Number(id)); if (!card) return;
       if (levelFilter && levelFilter !== "all" && card.level !== levelFilter) return;
       var st = prog[id], w = weakness(st);
       if (w == null || w <= 0) return;
@@ -113,7 +113,7 @@
     // level retention
     var byLvl = {};
     touched.forEach(function (id) {
-      var card = BY.get(Number(id)); if (!card) return;
+      var card = repo.getById(Number(id)); if (!card) return;
       var st = prog[id]; var a = st.attempts || 0; if (!a) return;
       var l = byLvl[card.level] || (byLvl[card.level] = { att: 0, cor: 0 });
       l.att += a; l.cor += (st.correct || 0);
@@ -189,7 +189,7 @@
   /* ---------------- Bookmarks page ---------------- */
   function bookmarkCards() {
     var ids = (window.HSKMeta && HSKMeta.bookmarks()) || [];
-    return ids.map(function (id) { return BY.get(Number(id)); }).filter(Boolean);
+    return repo.getManyByIds(ids.map(Number));   // requested order, skips missing (as before)
   }
   function renderBookmarks() {
     var level = $("bmLevel").value, q = trim($("bmSearch").value).toLowerCase();
