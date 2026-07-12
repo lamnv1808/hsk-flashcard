@@ -1,7 +1,7 @@
 {
-  "name": "Flashcard tiếng Trung HSK1–HSK4",
+  "name": "Flashcard tiếng Trung HSK1–HSK6",
   "short_name": "HSK Flashcards",
-  "description": "Học 1.194 từ vựng HSK1–HSK4 bằng flashcard, có phát âm tiếng Trung và lịch ôn spaced repetition.",
+  "description": "Học từ vựng HSK1–HSK6 bằng flashcard, có phát âm tiếng Trung và lịch ôn spaced repetition.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

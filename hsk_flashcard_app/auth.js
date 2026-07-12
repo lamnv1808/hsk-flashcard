@@ -141,7 +141,7 @@
     var wrap = el("div", { id: "authGate", class: "auth-gate", role: "dialog", "aria-modal": "true", "aria-label": "Đăng nhập" });
     wrap.innerHTML =
       '<div class="auth-card">' +
-        '<div class="auth-brand"><div class="eyebrow">FLASHCARD TIẾNG TRUNG</div><h2>HSK1–HSK4</h2></div>' +
+        '<div class="auth-brand"><div class="eyebrow">FLASHCARD TIẾNG TRUNG</div><h2>HSK1–HSK6</h2></div>' +
         '<div class="auth-tabs">' +
           '<button type="button" class="auth-tab active" data-tab="login">Đăng nhập</button>' +
           '<button type="button" class="auth-tab" data-tab="register">Đăng ký</button>' +

@@ -1,5 +1,8 @@
 
 const cards = window.HSK_CARDS || [];
+// All HSK levels present in the data, ordered by numeric suffix.
+// Auto-detected from the cards, so adding HSK5/HSK6 (or later HSK7…) needs no code change.
+const LEVELS = [...new Set(cards.map(c=>c.level))].sort((a,b)=>(parseInt(String(a).replace(/\D/g,""),10)||0)-(parseInt(String(b).replace(/\D/g,""),10)||0));
 // Storage keys: namespaced per logged-in account when cloud accounts are active,
 // otherwise the original global keys (unchanged local-only behavior).
 const AUTH = window.HSK_AUTH || {};
@@ -121,7 +124,7 @@ function levelCards(level){ return cards.filter(c=>c.level===level); }
 
 function renderLevelPicker(){
   const wrap=$("levelPicker"); wrap.innerHTML="";
-  ["HSK1","HSK2","HSK3","HSK4"].forEach(level=>{
+  LEVELS.forEach(level=>{
     const btn=document.createElement("button");
     btn.className="level-chip"+(selectedLevels.includes(level)?" active":"");
     btn.textContent=level;
@@ -145,8 +148,9 @@ function renderHome(){
   $("autoReadWord").checked=!!settings.autoReadWord;
   $("autoReadExample").checked=!!settings.autoReadExample;
   $("showFrontPinyin").checked=settings.showFrontPinyin!==false;   // default on
+  $("totalWords").textContent=cards.length.toLocaleString("vi-VN");   // total vocab count, automatic
   const grid=$("deckGrid"); grid.innerHTML="";
-  ["HSK1","HSK2","HSK3","HSK4"].forEach(level=>{
+  LEVELS.forEach(level=>{
     const all=levelCards(level), learned=all.filter(c=>getCardState(c.id).reps>0).length, due=dueCards([level]).length;
     const pct=Math.round(learned/all.length*100);
     const btn=document.createElement("button");
@@ -161,7 +165,7 @@ function renderHome(){
   $("learnedStat").textContent=learned;
   $("retentionStat").textContent=attempts?Math.round(correct/attempts*100)+"%":"0%";
   $("streakStat").textContent=settings.streak||0;
-  $("dueCount").textContent=dueCards(["HSK1","HSK2","HSK3","HSK4"]).length;
+  $("dueCount").textContent=dueCards(LEVELS).length;
 }
 
 function updateStreak(){

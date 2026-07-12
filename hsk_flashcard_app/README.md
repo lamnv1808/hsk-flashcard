@@ -1,4 +1,4 @@
-# Flashcard tiếng Trung HSK1–HSK4
+# Flashcard tiếng Trung HSK1–HSK6
 
 ## Chạy nhanh
 Cách ổn định nhất:
@@ -11,8 +11,20 @@ Sau đó mở: http://localhost:8000/hsk_flashcard_app/
 
 Hoặc upload toàn bộ thư mục lên Render Static Site, Netlify, Vercel hoặc GitHub Pages.
 
+## Cập nhật từ vựng (chỉ cần thay Excel)
+Nguồn từ vựng duy nhất là `source_data/HSK1-HSK6.xlsx` (mỗi sheet tên bắt đầu bằng `HSK`;
+cột B Chữ Hán, C Pinyin, D Nghĩa, E Ví dụ, F Pinyin ví dụ, G Dịch). Quy trình:
+
+1. Thay file `source_data/HSK1-HSK6.xlsx`.
+2. Chạy `python scripts/import_hsk_excel.py` (sinh lại `hsk_flashcard_app/data.js`,
+   giữ nguyên toàn bộ ID cũ, ID mới tăng dần — tự phát hiện sheet mới như HSK7).
+3. Chạy `run.bat` để kiểm tra tại `http://localhost:8000/hsk_flashcard_app/`.
+4. Deploy thủ công.
+
+`data.js` được sinh tự động — **không sửa tay**.
+
 ## Có sẵn
-- 1.194 thẻ HSK1–HSK4
+- 5.002 thẻ HSK1–HSK6 (sinh tự động từ `source_data/HSK1-HSK6.xlsx`)
 - Học theo từng cấp độ
 - Lật thẻ
 - Chấm Again / Hard / Good / Easy
