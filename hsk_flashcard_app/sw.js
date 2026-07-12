@@ -1,13 +1,17 @@
 
-const CACHE='hsk-flashcards-v4';
+const CACHE='hsk-flashcards-v5';
 const ASSETS=[
   './','index.html','styles.css','app.js','data.js','manifest.webmanifest',
+  'supabase-config.js','auth.js','sync.js',
   'icons/icon-192.png','icons/icon-512.png','icons/icon-maskable-512.png',
   'icons/apple-touch-icon-180.png','icons/favicon-32.png'
 ];
 self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS)))});
 self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k))))));
 self.addEventListener('fetch',e=>{
+  // Only handle same-origin GETs. Auth/sync calls (cross-origin, POST) pass straight to the network.
+  if(e.request.method!=='GET') return;
+  if(new URL(e.request.url).origin!==self.location.origin) return;
   e.respondWith(
     caches.match(e.request).then(r=>r||fetch(e.request).catch(()=>{
       // Offline fallback: serve the cached app shell for navigations.

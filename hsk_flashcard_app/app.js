@@ -1,7 +1,10 @@
 
 const cards = window.HSK_CARDS || [];
-const stateKey = "hsk_flashcard_progress_v2";
-const settingsKey = "hsk_flashcard_settings_v2";
+// Storage keys: namespaced per logged-in account when cloud accounts are active,
+// otherwise the original global keys (unchanged local-only behavior).
+const AUTH = window.HSK_AUTH || {};
+const stateKey = AUTH.progressKey || "hsk_flashcard_progress_v2";
+const settingsKey = AUTH.settingsKey || "hsk_flashcard_settings_v2";
 let progress = JSON.parse(localStorage.getItem(stateKey) || "{}");
 let settings = JSON.parse(localStorage.getItem(settingsKey) || "{}");
 let session = [], current = 0, selectedLevels = settings.selectedLevels || ["HSK1"], flipped = false, sessionGrades = [];
@@ -105,7 +108,7 @@ function showView(id){
 function today(){ return new Date().toISOString().slice(0,10); }
 function getCardState(id){ return progress[id] || {due: today(), interval:0, reps:0, correct:0, attempts:0}; }
 function save(){ localStorage.setItem(stateKey, JSON.stringify(progress)); }
-function saveSettings(){ localStorage.setItem(settingsKey, JSON.stringify(settings)); }
+function saveSettings(){ localStorage.setItem(settingsKey, JSON.stringify(settings)); if(window.HSKSync) HSKSync.onSettingsChanged(); }
 function dueCards(levels){
   const now=today();
   return cards.filter(c=>levels.includes(c.level) && getCardState(c.id).due<=now);
@@ -259,15 +262,18 @@ function gradeCard(grade){
   s.attempts=(s.attempts||0)+1;
   if(grade==="good"||grade==="easy") s.correct=(s.correct||0)+1;
   progress[c.id]=s; save();
+  if(window.HSKSync) HSKSync.markDirty(c.id);   // queue only this card for cloud sync
   sessionGrades[current]=grade;    // index-addressed: re-grading overwrites, never duplicates
   current++; renderCard();
 }
 
 function skipCard(){
   if(("i"+current) in snapshots){  // this position was graded before -> undo its SRS effect
+    const sid=snapshots["i"+current].id;
     revertSnapshot(current);
     delete snapshots["i"+current];
     save();
+    if(window.HSKSync) HSKSync.markDirty(sid);
   }
   sessionGrades[current]="skip";
   current++;
@@ -388,7 +394,7 @@ if(!speech.supported){
 } else {
   $("speechUnsupported").style.display="none";
 }
-$("resetBtn").onclick=()=>{if(confirm("Xóa toàn bộ tiến độ học?")){progress={};save();renderHome();}};
+$("resetBtn").onclick=()=>{if(confirm("Xóa toàn bộ tiến độ học?")){progress={};save();if(window.HSKSync)HSKSync.onReset();renderHome();}};
 $("themeBtn").onclick=()=>{document.body.classList.toggle("dark");settings.dark=document.body.classList.contains("dark");saveSettings();};
 if(settings.dark)document.body.classList.add("dark");
 // Lock the study screen to the real visible height (robust dvh alternative for iOS/dynamic toolbars).
@@ -399,3 +405,20 @@ window.addEventListener("orientationchange", setAppHeight);
 
 if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 renderHome();
+
+// Bridge for the (optional) cloud-sync layer. No-op in local-only mode.
+window.HSK_APP = {
+  keys(){ return { stateKey, settingsKey }; },
+  getProgress(){ return progress; },
+  getSettings(){ return settings; },
+  // Re-read localStorage into memory after a cloud pull merges new data.
+  // Never disrupts an active study session.
+  reloadState(){
+    progress = JSON.parse(localStorage.getItem(stateKey) || "{}");
+    settings = JSON.parse(localStorage.getItem(settingsKey) || "{}");
+    if(settings.selectedLevels && settings.selectedLevels.length) selectedLevels = settings.selectedLevels;
+    speech.rate = Number(settings.speechRate) || 1;
+    document.body.classList.toggle("dark", !!settings.dark);
+    if(!$("studyView").classList.contains("active")) renderHome();
+  }
+};

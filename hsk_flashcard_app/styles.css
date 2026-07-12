@@ -115,6 +115,49 @@ kbd{display:inline-block;min-width:20px;text-align:center;padding:2px 6px;border
   .card-face{transition:none}
 }
 
+/* ---------- v5: accounts (auth gate + profile menu) ---------- */
+.auth-hidden{display:none !important}
+body.auth-locked{overflow:hidden}
+.auth-gate{position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;
+  background:rgba(20,14,10,.55);backdrop-filter:blur(3px);opacity:0;transition:opacity .2s}
+.auth-gate.visible{opacity:1}
+.auth-card{width:min(420px,100%);background:var(--panel);color:var(--text);border:1px solid var(--line);
+  border-radius:24px;box-shadow:var(--shadow);padding:26px 24px;max-height:100%;overflow:auto}
+.auth-brand{margin-bottom:16px}.auth-brand h2{margin:2px 0 0;font-size:30px}
+.auth-tabs{display:flex;gap:8px;background:var(--bg);border:1px solid var(--line);border-radius:14px;padding:5px;margin-bottom:16px}
+.auth-tab{flex:1;border:0;background:transparent;color:var(--muted);font-weight:800;padding:10px;border-radius:10px;cursor:pointer}
+.auth-tab.active{background:var(--panel);color:var(--accent);box-shadow:0 1px 4px rgba(0,0,0,.08)}
+.auth-label{display:block;font-size:12px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin:12px 0 6px}
+.auth-input{width:100%;border:1px solid var(--line);background:var(--bg);color:var(--text);padding:13px 14px;border-radius:14px;font-size:16px}
+.auth-input:focus{outline:none;border-color:var(--accent)}
+.auth-submit{width:100%;margin-top:16px;min-height:48px}
+.auth-msg{min-height:18px;margin:10px 0 0;font-size:13px;font-weight:700}
+.auth-msg.err{color:#dc2626}.auth-msg.ok{color:#16a34a}
+.auth-hint{margin:14px 0 0;font-size:12px;color:var(--muted);line-height:1.5}
+
+/* Profile button + dropdown */
+.profile-btn{font-weight:900;font-size:16px;background:var(--accent);color:#fff;border-color:var(--accent);text-transform:uppercase}
+.profile-menu{position:fixed;z-index:1001;min-width:230px;background:var(--panel);color:var(--text);border:1px solid var(--line);
+  border-radius:16px;box-shadow:var(--shadow);padding:8px;display:flex;flex-direction:column;gap:2px}
+.profile-head{padding:8px 10px 10px}
+.profile-hi{display:block;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;font-weight:800}
+.profile-head strong{font-size:16px}
+.profile-item{text-align:left;border:0;background:transparent;color:var(--text);padding:11px 10px;border-radius:10px;font-weight:600;cursor:pointer}
+.profile-item:hover{background:var(--bg)}
+.profile-item.danger{color:#dc2626}
+.profile-foot{border-top:1px solid var(--line);margin-top:6px;padding:8px 10px 4px}
+.sync-state{font-size:12px;color:var(--muted)}
+
+/* Migration bottom prompt */
+.migrate-summary{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:10px 12px;font-size:13px;margin-bottom:12px}
+.migrate-actions{display:flex;flex-direction:column;gap:8px}
+.migrate-actions .primary-btn,.migrate-actions .secondary-btn{width:100%;min-height:46px}
+
+@media(max-width:720px){
+  .auth-card{border-radius:20px;padding:22px 18px}
+  .profile-menu{min-width:210px}
+}
+
 /* ---------- v4: swipe/drag navigation + one-screen mobile study ---------- */
 /* Drag follows the pointer; snaps back via transition. Flip animation lives on the faces, unaffected. */
 .flashcard{cursor:grab;touch-action:pan-y;user-select:none;-webkit-user-select:none;-webkit-user-drag:none;transform:translateX(var(--drag-x,0));transition:transform .28s ease}

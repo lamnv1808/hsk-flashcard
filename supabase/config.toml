@@ -1,0 +1,17 @@
+# Supabase CLI config. Replace project_id with your project ref (Settings → General).
+project_id = "your-project-ref"
+
+# register/login are PUBLIC endpoints (called with the anon apikey, no user JWT yet):
+# JWT verification MUST be disabled or the gateway rejects them before our code runs.
+[functions.register]
+verify_jwt = false
+
+[functions.login]
+verify_jwt = false
+
+# change-pin / delete-account receive the user's access token and verify it themselves.
+[functions.change-pin]
+verify_jwt = false
+
+[functions.delete-account]
+verify_jwt = false
