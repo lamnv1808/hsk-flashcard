@@ -12,7 +12,8 @@ Deno.serve(async (req) => {
   let body: any;
   try { body = await req.json(); } catch { return json({ error: "bad request" }, 400); }
 
-  const username = normUser(body.username);
+  const username = normUser(body.username);           // normalized (lowercase)
+  const display = String(body.username ?? "").trim();  // original case for display
   const pin = String(body.pin ?? "");
   if (!validUsername(username)) return json({ error: "invalid username" }, 400);
   if (!validPin(pin)) return json({ error: "invalid pin" }, 400);
@@ -35,7 +36,7 @@ Deno.serve(async (req) => {
   }
   const uid = created.user.id;
 
-  const { error: pErr } = await admin.from("profiles").insert({ id: uid, username });
+  const { error: pErr } = await admin.from("profiles").insert({ id: uid, username, display_username: display || username });
   if (pErr) {
     await admin.auth.admin.deleteUser(uid); // rollback
     return json({ error: "username taken" }, 409);
@@ -44,5 +45,5 @@ Deno.serve(async (req) => {
   const session = await passwordGrant(email, secret);
   if (!session) return json({ error: "created but sign-in failed; please log in" }, 500);
 
-  return json({ user: { id: uid, username }, session });
+  return json({ user: { id: uid, username: display || username }, session });
 });

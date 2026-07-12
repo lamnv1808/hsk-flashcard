@@ -1,5 +1,5 @@
 
-const CACHE='hsk-flashcards-v5';
+const CACHE='hsk-flashcards-v6';
 const ASSETS=[
   './','index.html','styles.css','app.js','data.js','manifest.webmanifest',
   'supabase-config.js','auth.js','sync.js',

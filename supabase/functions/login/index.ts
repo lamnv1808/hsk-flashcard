@@ -40,8 +40,9 @@ Deno.serve(async (req) => {
   const uid = session.user?.id;
   let name = username;
   if (uid) {
-    const { data: prof } = await admin.from("profiles").select("username").eq("id", uid).maybeSingle();
-    if (prof?.username) name = prof.username;
+    const { data: prof } = await admin.from("profiles").select("username, display_username").eq("id", uid).maybeSingle();
+    if (prof?.display_username) name = prof.display_username;
+    else if (prof?.username) name = prof.username;
   }
 
   return json({ user: { id: uid, username: name }, session });

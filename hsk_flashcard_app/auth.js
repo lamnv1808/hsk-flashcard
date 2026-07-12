@@ -89,12 +89,14 @@
   function validPin(p) { return PIN_RE.test(String(p || "")); }
 
   async function register(username, pin) {
-    var out = await callFn("register", { username: normUser(username), pin: String(pin) });
+    // Send the trimmed original case so the server can keep a display username;
+    // it normalizes to lowercase itself for uniqueness/login.
+    var out = await callFn("register", { username: String(username).trim(), pin: String(pin) });
     setSession(out.session); setUser(out.user);
     return out.user;
   }
   async function login(username, pin) {
-    var out = await callFn("login", { username: normUser(username), pin: String(pin) });
+    var out = await callFn("login", { username: String(username).trim(), pin: String(pin) });
     setSession(out.session); setUser(out.user);
     return out.user;
   }
@@ -153,6 +155,7 @@
             '<label class="auth-label" for="auPin2">Nhập lại mã PIN</label>' +
             '<input id="auPin2" class="auth-input" type="password" inputmode="numeric" pattern="\\d*" maxlength="4" placeholder="••••" />' +
           '</div>' +
+          '<label class="auth-show"><input type="checkbox" id="auShow" /> Hiện mã PIN</label>' +
           '<p id="auMsg" class="auth-msg" role="alert"></p>' +
           '<button id="auSubmit" type="submit" class="primary-btn auth-submit">Đăng nhập</button>' +
         '</form>' +
@@ -188,6 +191,11 @@
     });
     document.getElementById("auPin").addEventListener("input", digitsOnly);
     document.getElementById("auPin2").addEventListener("input", digitsOnly);
+    document.getElementById("auShow").addEventListener("change", function (e) {
+      var t = e.target.checked ? "text" : "password";
+      document.getElementById("auPin").type = t;
+      document.getElementById("auPin2").type = t;
+    });
     document.getElementById("authForm").addEventListener("submit", onSubmit);
     document.getElementById("auUser").focus();
   }

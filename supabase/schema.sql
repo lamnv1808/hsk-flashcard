@@ -6,11 +6,14 @@
 
 -- ---------- Tables ----------
 create table if not exists public.profiles (
-  id         uuid primary key references auth.users(id) on delete cascade,
-  username   text not null,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  id               uuid primary key references auth.users(id) on delete cascade,
+  username         text not null,           -- normalized (lowercase); used for uniqueness + login
+  display_username text,                     -- original-case username for display only
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now()
 );
+-- Add the display column on existing installs (idempotent).
+alter table public.profiles add column if not exists display_username text;
 -- Case-insensitive uniqueness for usernames.
 create unique index if not exists profiles_username_lower_idx on public.profiles (lower(username));
 

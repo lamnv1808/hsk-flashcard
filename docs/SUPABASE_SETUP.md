@@ -36,10 +36,15 @@ Open **SQL Editor → New query**, paste the entire contents of
 
 | Table | Purpose |
 |---|---|
-| `profiles` | `id → auth.users`, `username` (unique, case-insensitive) |
+| `profiles` | `id → auth.users`, `username` (normalized, unique, case-insensitive), `display_username` (original case) |
 | `card_progress` | one row per (user, card): due/interval/reps/correct/attempts/updated_at |
-| `user_settings` | one JSON row per user (streak, audio, dark, decks, session size) |
+| `user_settings` | one JSON row per user (streak, audio, dark, decks, session size, **front-pinyin display**) |
 | `login_attempts` | rate-limit counters (server-only, no client access) |
+
+> The per-user **"Hiển thị Pinyin ở mặt trước"** preference is stored inside the
+> `user_settings.data` JSON — no schema change is needed for it, and it syncs +
+> stays isolated per account automatically. Re-running `schema.sql` on an existing
+> project is safe; it adds `display_username` via `add column if not exists`.
 
 RLS is enabled so each user can only read/write their own rows. Two RPCs
 (`sync_push_progress`, `sync_push_settings`) implement **latest-updated_at-wins**
@@ -108,6 +113,18 @@ Commit + deploy. On next load the app shows the **Login / Register** gate.
 (Leaving the fields blank reverts to local-only mode instantly.)
 
 ---
+
+## 6b. Local development
+
+Use the existing **`run.bat`** (double-click it, or run it in a terminal):
+
+```bat
+run.bat        :: starts  python -m http.server 8000  in the repo root
+```
+
+Then open <http://localhost:8000/hsk_flashcard_app/>. Test in a real browser
+(not just an in-editor preview). With `supabase-config.js` blank you are testing
+local-only mode; fill it in to test the account gate against your project.
 
 ## 7. Render configuration
 

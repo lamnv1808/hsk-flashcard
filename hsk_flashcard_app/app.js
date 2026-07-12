@@ -140,6 +140,7 @@ function renderHome(){
   $("speechRate").value=String(settings.speechRate || 1);
   $("autoReadWord").checked=!!settings.autoReadWord;
   $("autoReadExample").checked=!!settings.autoReadExample;
+  $("showFrontPinyin").checked=settings.showFrontPinyin!==false;   // default on
   const grid=$("deckGrid"); grid.innerHTML="";
   ["HSK1","HSK2","HSK3","HSK4"].forEach(level=>{
     const all=levelCards(level), learned=all.filter(c=>getCardState(c.id).reps>0).length, due=dueCards([level]).length;
@@ -185,6 +186,15 @@ function startStudy(levels){
   current=0; sessionGrades=[]; snapshots={}; updateStreak(); showView("studyView"); renderCard();
 }
 
+// Vocab pinyin (column C): shown on the FRONT by default; when the setting is off it
+// moves to the back (above the meaning). Never both sides; example pinyin is untouched.
+function applyPinyinDisplay(){
+  const showFP = settings.showFrontPinyin !== false;   // undefined => true (existing users unchanged)
+  $("pinyin").style.display = showFP ? "" : "none";
+  $("backWordBlock").style.display = showFP ? "none" : "";
+  $("flashcard").classList.toggle("no-front-pinyin", !showFP);  // lets CSS fit the denser back on mobile
+}
+
 function renderCard(){
   if(current>=session.length) return finishSession();
   const c=session[current]; flipped=false;
@@ -199,6 +209,9 @@ function renderCard(){
   $("progressBar").style.width=((current/session.length)*100)+"%";
   $("levelBadge").textContent=c.level; $("word").textContent=c.word; $("pinyin").textContent=c.pinyin;
   $("meaning").textContent=c.meaning; $("example").textContent=c.example; $("examplePinyin").textContent=c.examplePinyin; $("translation").textContent=c.translation;
+  // Front vocab pinyin (column C) shows on the front by default; when disabled it moves to the back.
+  $("backWord").textContent=c.word; $("backPinyin").textContent=c.pinyin;
+  applyPinyinDisplay();
   $("flashcard").setAttribute("aria-label",`Thẻ ${current+1}/${session.length}. Từ: ${c.word}. Bấm hoặc nhấn Space để xem nghĩa.`);
   $("srStatus").textContent=`Thẻ ${current+1} trên ${session.length}. ${c.level}: ${c.word}.`;
   stopSpeech();                       // always stop audio when the card changes
@@ -388,6 +401,7 @@ window.addEventListener("appinstalled",()=>{ deferredInstall=null; $("installBtn
 $("speechRate").onchange=()=>{speech.rate=Number($("speechRate").value)||1;settings.speechRate=speech.rate;saveSettings();};
 $("autoReadWord").onchange=()=>{settings.autoReadWord=$("autoReadWord").checked;saveSettings();};
 $("autoReadExample").onchange=()=>{settings.autoReadExample=$("autoReadExample").checked;saveSettings();};
+$("showFrontPinyin").onchange=()=>{settings.showFrontPinyin=$("showFrontPinyin").checked;saveSettings();applyPinyinDisplay();};
 if(!speech.supported){
   $("speechBar").style.display="none";
   ["speechRate","autoReadWord","autoReadExample"].forEach(id=>$(id).disabled=true);
@@ -419,6 +433,7 @@ window.HSK_APP = {
     if(settings.selectedLevels && settings.selectedLevels.length) selectedLevels = settings.selectedLevels;
     speech.rate = Number(settings.speechRate) || 1;
     document.body.classList.toggle("dark", !!settings.dark);
+    applyPinyinDisplay();
     if(!$("studyView").classList.contains("active")) renderHome();
   }
 };

@@ -86,6 +86,13 @@
           <p id="speechUnsupported" class="muted speech-note">Trình duyệt này không hỗ trợ đọc audio (SpeechSynthesis).</p>
         </div>
 
+        <div class="section-title">
+          <h3>Hiển thị</h3>
+        </div>
+        <div id="displaySettings" class="speech-settings display-settings">
+          <label class="switch-row"><input type="checkbox" id="showFrontPinyin" /><span>Hiển thị Pinyin ở mặt trước</span></label>
+        </div>
+
         <div class="stats-grid">
           <div class="stat-card"><span>Đã học</span><strong id="learnedStat">0</strong></div>
           <div class="stat-card"><span>Chuỗi ngày</span><strong id="streakStat">0</strong></div>
@@ -113,6 +120,10 @@
             <div class="tap-hint">Chạm để xem đáp án · bấm từ để nghe</div>
           </div>
           <div class="card-face card-back">
+            <div id="backWordBlock" class="back-word-block" style="display:none">
+              <div id="backWord" class="back-word"></div>
+              <div id="backPinyin" class="back-pinyin"></div>
+            </div>
             <span class="label">Nghĩa</span>
             <div id="meaning" class="meaning"></div>
             <div class="divider"></div>

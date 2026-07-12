@@ -158,6 +158,26 @@ body.auth-locked{overflow:hidden}
   .profile-menu{min-width:210px}
 }
 
+/* ---------- Part B: front-pinyin toggle ---------- */
+.display-settings{grid-template-columns:1fr}
+.back-word-block{text-align:center;margin-bottom:10px}
+.back-word{font-size:clamp(34px,7vw,52px);font-weight:800;line-height:1.12}
+.back-pinyin{font-size:20px;color:var(--muted);margin-top:4px}
+.auth-show{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px;color:var(--muted);font-weight:600;cursor:pointer}
+.auth-show input{width:16px;height:16px;accent-color:var(--accent);cursor:pointer}
+@media(max-width:720px){
+  body.studying .back-word{font-size:clamp(30px,7vw,44px)}
+  body.studying .back-pinyin{font-size:17px}
+  /* Denser back (word+pinyin moved here): top-align, compress, and allow an
+     internal scroll as a safety net so the word is never clipped and the page
+     itself still never scrolls. Only affects the pinyin-disabled mode. */
+  body.studying .flashcard.no-front-pinyin .card-back{justify-content:flex-start;overflow-y:auto}
+  body.studying .flashcard.no-front-pinyin .back-word-block{margin-bottom:6px}
+  body.studying .flashcard.no-front-pinyin .meaning{font-size:26px;margin:6px 0 12px}
+  body.studying .flashcard.no-front-pinyin .divider{margin:6px 0 12px}
+  body.studying .flashcard.no-front-pinyin .example{font-size:26px}
+}
+
 /* ---------- v4: swipe/drag navigation + one-screen mobile study ---------- */
 /* Drag follows the pointer; snaps back via transition. Flip animation lives on the faces, unaffected. */
 .flashcard{cursor:grab;touch-action:pan-y;user-select:none;-webkit-user-select:none;-webkit-user-drag:none;transform:translateX(var(--drag-x,0));transition:transform .28s ease}

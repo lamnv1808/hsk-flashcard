@@ -64,3 +64,29 @@ operator via `docs/SUPABASE_SETUP.md`).
 
 Real registration/login/PIN-change/delete/sync against a live Supabase project,
 per the checklist in `docs/SUPABASE_SETUP.md` §10.
+
+---
+
+# Follow-up: front-pinyin setting + auth refinements
+
+**All items above remain UNCHANGED** (re-verified). Additional changes this round:
+
+| Area | Status | Notes |
+|---|---|---|
+| Front vocab pinyin (default ON) | **UNCHANGED** | undefined ⇒ true; existing users see identical front (word + pinyin), back with no vocab-pinyin duplication |
+| New setting "Hiển thị Pinyin ở mặt trước" | **NEW** | home *Hiển thị* section; applies immediately; persisted in existing settings blob; per-user synced when logged in |
+| Card back (setting OFF) | **CHANGED (opt-in only)** | shows word (col B) + vocab pinyin (col C) at top, then existing meaning/example/example-pinyin/translation. Example pinyin always shown; vocab pinyin never on both sides, never gone |
+| Card back (setting ON) | **UNCHANGED** | `#backWordBlock` hidden → identical to production |
+| Mobile one-screen (OFF mode) | **UNCHANGED** | page never scrolls; denser back top-aligns + compresses + internal-scroll safety net so the word is never clipped (375×667 verified) |
+| Desktop layout | **UNCHANGED** | stable in both modes |
+| Audio / auto-read | **UNCHANGED** | Chinese only; never reads vocab or example pinyin or Vietnamese |
+| SRS / swipe / drag / keyboard / dark / PWA | **UNCHANGED** | full regression re-run green |
+| Auth gate: show/hide PIN | **NEW** | "Hiện mã PIN" toggles PIN field type; numeric inputmode + Enter-submit unchanged |
+| Display username | **CHANGED (additive)** | original case preserved for display; lowercase still used for uniqueness/login/HMAC. `profiles.display_username` added (idempotent `alter ... add column if not exists`) |
+| Service worker | **CHANGED (safe)** | cache v5→v6 (HTML/JS/CSS changed); still ignores non-GET/cross-origin → never caches auth/sync |
+
+### Verified (headless Chromium)
+- Local mode: pinyin ON → front pinyin visible, back block hidden; OFF → front hidden, back shows word+vocab-pinyin, example pinyin still visible, word==backWord, pinyin==backPinyin, not duplicated. No console errors.
+- Mobile 375×667 OFF: page no-scroll, back word fully inside the card (not clipped).
+- Configured (mock): show/hide PIN toggles type; display username `Minh_An` preserved with id `u-minh_an`; two accounts have distinct namespaced settings keys (pinyin preference isolated).
+- Auth/offline/migration suites all still green.
