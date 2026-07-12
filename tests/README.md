@@ -17,7 +17,24 @@ python -m pip install playwright
 python -m playwright install chromium
 ```
 
-## Run
+## One command (recommended)
+```bash
+python tests/run_regression.py
+```
+Starts a temporary static server on a free port, runs every suite grouped by domain,
+tears the server down, prints a PASS/FAIL summary, writes `tests/reports/latest.{json,md}`
+(gitignored), and exits non-zero on any failure. Certified results:
+[`tests/BASELINE_RESULTS.md`](BASELINE_RESULTS.md).
+
+## Layout
+- `tests/data/` — pure-Python contract tests (no browser): card stability, baseline
+  comparison, importer determinism, legacy↔canonical adapter round-trip, progress/settings contracts.
+- `tests/browser/` — Playwright characterization: SRS goldens, bookmarks/notes sync + isolation.
+- `tests/regression/` — Phase-0 browser suites (Study/Test/Auth/Offline/features/P0-leak).
+- `tests/support/` — shared loaders + the **prototype** legacy card adapter (test-only, not runtime).
+- `tests/fixtures/` — legacy progress/settings fixtures.
+
+## Run suites individually
 1. Serve the app (either):
    - `run.bat`  → http://localhost:8000/hsk_flashcard_app/  (default the tests expect)
    - or any static server; then set `HSK_BASE_URL`, e.g.

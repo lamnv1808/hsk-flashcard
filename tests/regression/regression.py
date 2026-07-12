@@ -52,5 +52,10 @@ with sync_playwright() as p:
     pg.evaluate("""() => { settings.autoReadWord=true; startStudy(['HSK1']); window.__spoke=[]; current=0; renderCard(); }""")
     out["autoReadWord"]=pg.evaluate("() => window.__spoke.slice()")
     out["consoleErrors"]=errors
+    out["pass"]=bool(errors==[] and out.get("spaceFlips") and out.get("grade3_interval")==3
+                     and out.get("nSkips") and out.get("readAll_noPinyinNoViet") and out.get("escExits")
+                     and out.get("darkOn") and out.get("darkPersisted") and out.get("advancedTo")==1
+                     and out.get("autoReadWord"))
     print(json.dumps(out, ensure_ascii=False))
     ctx.close(); b.close()
+import sys as _sys; _sys.exit(0 if out.get("pass") else 1)

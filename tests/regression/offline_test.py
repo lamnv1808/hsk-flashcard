@@ -49,4 +49,8 @@ with sync_playwright() as p:
     out["pushed_rows_total"] = sum(len(x.get("rows",[])) for x in pushed)
     b.close()
 
+out["pass"]=bool(out.get("queued_dirty")==2 and out.get("studied_locally")==2
+                 and out.get("nothing_pushed_offline") and out.get("dirty_after_reconnect")==0
+                 and out.get("pushed_rows_total")==2)
 print(json.dumps(out, ensure_ascii=False))
+import sys as _sys; _sys.exit(0 if out.get("pass") else 1)

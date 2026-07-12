@@ -119,4 +119,8 @@ with sync_playwright() as p:
     ctx3.close()
     b.close()
 
+out["pass"]=bool(out.get("pageerrors")==[] and out.get("gate_shown") and out.get("gate_gone")
+                 and out.get("isolation") and out.get("logout_gate") and out.get("migrate_prompt")
+                 and out.get("legacy_preserved") and out.get("push_only_modified") and out.get("migrated_store")==2)
 print(json.dumps(out, ensure_ascii=False))
+import sys as _sys; _sys.exit(0 if out.get("pass") else 1)
