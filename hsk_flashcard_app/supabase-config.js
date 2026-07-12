@@ -12,6 +12,6 @@
 //  NEVER put the service_role key or any secret here.
 // ============================================================
 window.SUPABASE_CONFIG = {
-  url: "",      // e.g. "https://abcdefghijkl.supabase.co"
-  anonKey: ""   // e.g. "eyJhbGciOiJIUzI1NiIsInR5cCI6..."
+  url: "https://evksxsrlhpkjvgsbvlhu.supabase.co",
+  anonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV2a3N4c3JsaHBranZnc2J2bGh1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM4MTU5ODQsImV4cCI6MjA5OTM5MTk4NH0.Vd3u-I0eKsv18qbUJSRastiMzb-j8USW1TB_YSExFYw"
 };
