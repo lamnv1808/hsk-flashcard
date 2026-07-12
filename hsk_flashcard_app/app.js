@@ -12,11 +12,15 @@ let snapshots = {};   // in-memory per-session-index undo history for SRS (never
 
 const $ = id => document.getElementById(id);
 
+// Allowed speech speeds; any other/legacy value safely falls back to 1x.
+const SPEECH_RATES = [0.5, 0.75, 1, 1.25, 1.5];
+function normSpeechRate(v){ v = Number(v); return SPEECH_RATES.includes(v) ? v : 1; }
+
 /* ---------- Speech (browser SpeechSynthesis) ---------- */
 const speech = {
   supported: typeof window !== "undefined" && "speechSynthesis" in window,
   voices: [],
-  rate: Number(settings.speechRate) || 1,
+  rate: normSpeechRate(settings.speechRate),
   token: 0
 };
 // Language prefixes we accept. Android often reports Mandarin as "cmn-*".
@@ -137,7 +141,7 @@ function renderLevelPicker(){
 function renderHome(){
   renderLevelPicker();
   $("sessionSize").value=settings.sessionSize || "20";
-  $("speechRate").value=String(settings.speechRate || 1);
+  $("speechRate").value=String(normSpeechRate(settings.speechRate));
   $("autoReadWord").checked=!!settings.autoReadWord;
   $("autoReadExample").checked=!!settings.autoReadExample;
   $("showFrontPinyin").checked=settings.showFrontPinyin!==false;   // default on
@@ -398,7 +402,7 @@ $("installBtn").onclick=async()=>{
   deferredInstall=null; $("installBtn").hidden=true;
 };
 window.addEventListener("appinstalled",()=>{ deferredInstall=null; $("installBtn").hidden=true; });
-$("speechRate").onchange=()=>{speech.rate=Number($("speechRate").value)||1;settings.speechRate=speech.rate;saveSettings();};
+$("speechRate").onchange=()=>{speech.rate=normSpeechRate($("speechRate").value);settings.speechRate=speech.rate;saveSettings();};
 $("autoReadWord").onchange=()=>{settings.autoReadWord=$("autoReadWord").checked;saveSettings();};
 $("autoReadExample").onchange=()=>{settings.autoReadExample=$("autoReadExample").checked;saveSettings();};
 $("showFrontPinyin").onchange=()=>{settings.showFrontPinyin=$("showFrontPinyin").checked;saveSettings();applyPinyinDisplay();};
@@ -431,7 +435,7 @@ window.HSK_APP = {
     progress = JSON.parse(localStorage.getItem(stateKey) || "{}");
     settings = JSON.parse(localStorage.getItem(settingsKey) || "{}");
     if(settings.selectedLevels && settings.selectedLevels.length) selectedLevels = settings.selectedLevels;
-    speech.rate = Number(settings.speechRate) || 1;
+    speech.rate = normSpeechRate(settings.speechRate);
     document.body.classList.toggle("dark", !!settings.dark);
     applyPinyinDisplay();
     if(!$("studyView").classList.contains("active")) renderHome();
