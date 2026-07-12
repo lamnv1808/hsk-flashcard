@@ -458,6 +458,9 @@ window.HSK_APP = {
     (ids||[]).forEach(id=>{ const c=byId.get(id); if(c && !seen.has(c.id)){ seen.add(c.id); list.push(c); } });
     if(!list.length) return false;
     session=list; current=0; sessionGrades=[]; snapshots={};
+    // Deactivate any non-core view (Weak Words / Bookmarks / etc.) before entering
+    // Study Mode, since showView() only manages home/study/complete.
+    document.querySelectorAll(".view").forEach(v=>v.classList.remove("active"));
     updateStreak(); showView("studyView"); renderCard();
     return true;
   },

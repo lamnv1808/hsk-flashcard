@@ -172,12 +172,12 @@
     vals.forEach(function (v, i) {
       var h = Math.round((v / max) * (H - pad));
       var x = i * 16 + 3, y = H - h;
-      svg += '<rect x="' + x + '" y="' + y + '" width="' + bw + '" height="' + Math.max(h, v > 0 ? 2 : 0) + '" rx="2" fill="var(--accent)"' + (v === 0 ? ' opacity="0.15"' : '') + '></rect>';
-      if (v > 0) svg += '<text x="' + (x + bw / 2) + '" y="' + (y - 2) + '" font-size="8" text-anchor="middle" fill="var(--muted)">' + v + '</text>';
+      svg += '<rect x="' + x + '" y="' + y + '" width="' + bw + '" height="' + Math.max(h, v > 0 ? 2 : 0) + '" rx="2" style="fill:var(--accent)"' + (v === 0 ? ' opacity="0.15"' : '') + '></rect>';
+      if (v > 0) svg += '<text x="' + (x + bw / 2) + '" y="' + (y - 2) + '" font-size="8" text-anchor="middle" style="fill:var(--muted)">' + v + '</text>';
     });
     // first & last date labels
-    svg += '<text x="1" y="' + (H + 12) + '" font-size="8" fill="var(--muted)">' + fmtDate(labels[0]).slice(5) + '</text>';
-    svg += '<text x="' + (W - 1) + '" y="' + (H + 12) + '" font-size="8" text-anchor="end" fill="var(--muted)">' + fmtDate(labels[labels.length - 1]).slice(5) + '</text>';
+    svg += '<text x="1" y="' + (H + 12) + '" font-size="8" style="fill:var(--muted)">' + fmtDate(labels[0]).slice(5) + '</text>';
+    svg += '<text x="' + (W - 1) + '" y="' + (H + 12) + '" font-size="8" text-anchor="end" style="fill:var(--muted)">' + fmtDate(labels[labels.length - 1]).slice(5) + '</text>';
     svg += "</svg>";
     $("dailyChart").innerHTML = svg;
     var avg = (total / chartDays).toFixed(1);
