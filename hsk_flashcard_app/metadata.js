@@ -14,11 +14,7 @@
   function persist() { if (window.saveSettings) window.saveSettings(); }
   function curCard() { return window.currentCard ? window.currentCard() : null; }
   function trim(x) { return String(x == null ? "" : x).trim(); }
-  function localDay(d) {
-    d = d || new Date();
-    var m = d.getMonth() + 1, day = d.getDate();
-    return d.getFullYear() + "-" + (m < 10 ? "0" : "") + m + "-" + (day < 10 ? "0" : "") + day;
-  }
+  function localDay(d) { return window.HSKUtil.date.localDay(d); }   // delegates to core/util/date.js
 
   /* ---------------- bookmarks ---------------- */
   function bookmarks() { var s = S(); return Array.isArray(s.bookmarks) ? s.bookmarks : []; }

@@ -20,6 +20,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Suites grouped by domain. Paths are repo-relative.
 GROUPS = {
+    "Utilities (Phase 2)": [
+        "tests/browser/test_util_units.py",
+    ],
     "Data & contracts": [
         "tests/data/test_card_stability.py",
         "tests/data/test_baseline_comparison.py",

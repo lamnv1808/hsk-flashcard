@@ -2,7 +2,7 @@
 const cards = window.HSK_CARDS || [];
 // All HSK levels present in the data, ordered by numeric suffix.
 // Auto-detected from the cards, so adding HSK5/HSK6 (or later HSK7…) needs no code change.
-const LEVELS = [...new Set(cards.map(c=>c.level))].sort((a,b)=>(parseInt(String(a).replace(/\D/g,""),10)||0)-(parseInt(String(b).replace(/\D/g,""),10)||0));
+const LEVELS = window.HSKUtil.levels.levelsFromCards(cards);
 // Storage keys: namespaced per logged-in account when cloud accounts are active,
 // otherwise the original global keys (unchanged local-only behavior).
 const AUTH = window.HSK_AUTH || {};
@@ -453,7 +453,7 @@ window.HSK_APP = {
   // (used by "Ôn các từ này" / "Học các từ đã lưu"). Reuses the existing renderer, audio,
   // grading and SRS exactly.
   startSession(ids){
-    const byId = new Map(cards.map(c=>[c.id,c]));
+    const byId = window.HSKUtil.cardIndex.buildCardById(cards);
     const list=[]; const seen=new Set();
     (ids||[]).forEach(id=>{ const c=byId.get(id); if(c && !seen.has(c.id)){ seen.add(c.id); list.push(c); } });
     if(!list.length) return false;

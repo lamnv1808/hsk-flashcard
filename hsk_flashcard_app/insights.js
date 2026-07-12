@@ -7,11 +7,8 @@
   "use strict";
   var $ = function (id) { return document.getElementById(id); };
   var CARDS = window.HSK_CARDS || [];
-  var BY = new Map(CARDS.map(function (c) { return [c.id, c]; }));
-  var LEVELS = (function () {
-    var s = {}; CARDS.forEach(function (c) { s[c.level] = 1; });
-    return Object.keys(s).sort(function (a, b) { return (parseInt(String(a).replace(/\D/g, ""), 10) || 0) - (parseInt(String(b).replace(/\D/g, ""), 10) || 0); });
-  })();
+  var BY = window.HSKUtil.cardIndex.buildCardById(CARDS);
+  var LEVELS = window.HSKUtil.levels.levelsFromCards(CARDS);
   function P() { return (window.HSK_APP && window.HSK_APP.getProgress()) || {}; }
   function trim(x) { return String(x == null ? "" : x).trim(); }
   function setActive(id) { document.querySelectorAll(".view").forEach(function (v) { v.classList.toggle("active", v.id === id); }); }
@@ -62,7 +59,7 @@
     var o = document.createElement("option"); o.value = "all"; o.textContent = allLabel; sel.appendChild(o);
     LEVELS.forEach(function (lv) { var op = document.createElement("option"); op.value = lv; op.textContent = lv; sel.appendChild(op); });
   }
-  function fmtDate(d) { if (!d) return ""; return d.toISOString().slice(0, 10); }
+  function fmtDate(d) { return d ? window.HSKUtil.date.isoDay(d) : ""; }   // UTC day; falsy -> "" (unchanged)
   function wordRow(card, opts) {
     opts = opts || {};
     var row = document.createElement("div"); row.className = "word-row";

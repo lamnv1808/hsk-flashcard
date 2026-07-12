@@ -23,19 +23,14 @@
   ];
   function typeDef(id) { for (var i = 0; i < TYPE_DEFS.length; i++) if (TYPE_DEFS[i].id === id) return TYPE_DEFS[i]; return null; }
 
-  var LEVELS = (function () {
-    var s = {}; CARDS.forEach(function (c) { s[c.level] = 1; });
-    return Object.keys(s).sort(function (a, b) {
-      return (parseInt(String(a).replace(/\D/g, ""), 10) || 0) - (parseInt(String(b).replace(/\D/g, ""), 10) || 0);
-    });
-  })();
+  var LEVELS = window.HSKUtil.levels.levelsFromCards(CARDS);
 
   // -------- setup state (independent of Study Mode) --------
   var setup = { levels: [LEVELS[0] || "HSK1"], count: "20", types: [1, 2, 3, 4, 5, 6], mix: false };
   var state = null; // active test session
 
   // ---------------- utils ----------------
-  function shuffle(a) { for (var i = a.length - 1; i > 0; i--) { var j = (Math.random() * (i + 1)) | 0; var t = a[i]; a[i] = a[j]; a[j] = t; } return a; }
+  // Fisher-Yates moved to core/util/shuffle.js: HSKUtil.shuffle.shuffleInPlace / shuffledCopy
   function trim(x) { return String(x == null ? "" : x).trim(); }
   function esc(el, text) { el.textContent = text; return el; }
   function fmtDuration(ms) { var s = Math.round(ms / 1000); var m = (s / 60) | 0; s = s % 60; return m + ":" + (s < 10 ? "0" : "") + s; }
@@ -84,7 +79,7 @@
     if (distractors.length < 1) return null; // need at least one alternative
     var opts = [{ card: card, isCorrect: true }];
     distractors.forEach(function (c) { opts.push({ card: c, isCorrect: false }); });
-    shuffle(opts);
+    window.HSKUtil.shuffle.shuffleInPlace(opts);
     return {
       card: card, type: type,
       options: opts.map(function (o) { return { card: o.card, isCorrect: o.isCorrect, lines: answerLines(o.card, type) }; }),
@@ -94,7 +89,7 @@
   }
 
   function firstBuildable(card, pool, types) {
-    var order = shuffle(types.slice());
+    var order = window.HSKUtil.shuffle.shuffledCopy(types);
     for (var i = 0; i < order.length; i++) { var q = buildQuestion(card, pool, order[i]); if (q) return q; }
     return null;
   }
@@ -103,11 +98,11 @@
     var pool = CARDS.filter(function (c) { return cfg.levels.indexOf(c.level) >= 0; });
     var types = cfg.mix ? [1, 2, 3, 4, 5, 6] : cfg.types.slice();
     var N = cfg.count === "all" ? pool.length : Math.min(parseInt(cfg.count, 10), pool.length);
-    var cardOrder = shuffle(pool.slice());
+    var cardOrder = window.HSKUtil.shuffle.shuffledCopy(pool);
     // balanced type assignment: round-robin then shuffle
     var assign = [];
     for (var i = 0; i < N; i++) assign.push(types[i % types.length]);
-    shuffle(assign);
+    window.HSKUtil.shuffle.shuffleInPlace(assign);
     var questions = [], idx = 0;
     while (questions.length < N && idx < cardOrder.length) {
       var card = cardOrder[idx++];
@@ -380,7 +375,7 @@
   function saveHistory(entry) {
     try { var list = loadHistory(); list.unshift(entry); list = list.slice(0, 20); localStorage.setItem(historyKey(), JSON.stringify(list)); } catch (_) {}
   }
-  function todayStr() { try { return new Date().toISOString().slice(0, 10); } catch (_) { return ""; } }
+  function todayStr() { return window.HSKUtil.date.isoDay(); }   // UTC day (delegates)
   function nowMs() { try { return Date.now(); } catch (_) { return 0; } }
 
   // ---------------- keyboard (test quiz only) ----------------
