@@ -67,6 +67,8 @@
           <button id="startMixedBtn" class="primary-btn start-btn">Bắt đầu học</button>
         </div>
 
+        <button id="openTestBtn" class="secondary-btn test-cta" type="button">📝 Bài test — Trắc nghiệm</button>
+
         <div id="deckGrid" class="deck-grid"></div>
 
         <div class="section-title">
@@ -182,6 +184,112 @@
         <p id="completeText" class="muted"></p>
         <button id="homeBtn" class="primary-btn">Về trang chủ</button>
       </section>
+
+      <!-- ============ TEST MODE (separate from Study Mode) ============ -->
+      <section id="testSetupView" class="view" aria-label="Thiết lập bài test">
+        <div class="study-head">
+          <button id="testSetupBack" class="icon-btn" type="button" aria-label="Về trang chủ">←</button>
+          <div><div class="eyebrow">BÀI TEST</div><strong>Thiết lập</strong></div>
+          <span class="head-spacer" aria-hidden="true"></span>
+        </div>
+
+        <div class="study-config test-config">
+          <div>
+            <div class="config-label">Cấp độ</div>
+            <div id="testLevelPicker" class="level-picker"></div>
+          </div>
+          <div>
+            <label class="config-label" for="testCount">Số câu hỏi</label>
+            <select id="testCount" class="select-control">
+              <option value="10">10 câu</option>
+              <option value="20" selected>20 câu</option>
+              <option value="30">30 câu</option>
+              <option value="50">50 câu</option>
+              <option value="all">Tất cả</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="section-title"><h3>Dạng câu hỏi</h3></div>
+        <label class="switch-row test-mix"><input type="checkbox" id="testMix" />
+          <span><strong>Trộn linh hoạt</strong><small>Trộn ngẫu nhiên tất cả dạng câu hỏi.</small></span></label>
+        <div id="testTypes" class="test-types"></div>
+
+        <p id="testSetupMsg" class="auth-msg" role="alert"></p>
+        <button id="testStartBtn" class="primary-btn test-start" type="button">Bắt đầu test</button>
+        <div id="testHistory" class="test-history"></div>
+      </section>
+
+      <section id="testQuizView" class="view" aria-label="Bài test">
+        <div class="study-head">
+          <button id="testExitBtn" class="icon-btn" type="button" aria-label="Thoát bài test (Esc)">←</button>
+          <div>
+            <div id="testTypeLabel" class="eyebrow"></div>
+            <strong><span id="testQIndex">1</span>/<span id="testQTotal">1</span> · <span id="testScore">0</span> đúng</strong>
+          </div>
+          <span class="head-spacer" aria-hidden="true"></span>
+        </div>
+        <div class="progress-track"><div id="testProgressBar"></div></div>
+
+        <div id="testQuestionCard" class="test-question" tabindex="-1">
+          <span id="testQBadge" class="badge"></span>
+          <div id="testQuestion" class="test-q-main"></div>
+          <div class="test-q-hint">Chọn đáp án đúng</div>
+        </div>
+
+        <div id="testOptions" class="test-options" role="group" aria-label="Các đáp án"></div>
+        <div id="testFeedback" class="test-feedback" role="status" aria-live="polite"></div>
+
+        <div id="testAnswerPanel" class="test-answer-panel" hidden>
+          <div class="ans-head">
+            <span id="testAnsWord" class="ans-word"></span>
+            <span id="testAnsPinyin" class="ans-pinyin"></span>
+          </div>
+          <div id="testAnsMeaning" class="ans-meaning"></div>
+          <div class="ans-divider"></div>
+          <div id="testAnsExample" class="ans-example"></div>
+          <div id="testAnsExamplePinyin" class="ans-example-pinyin"></div>
+          <div id="testAnsTranslation" class="ans-translation"></div>
+          <div class="test-speech-bar">
+            <button id="testSpeakWord" type="button" class="speech-btn" aria-label="Đọc từ vựng">🔊 <span>Từ</span></button>
+            <button id="testSpeakExample" type="button" class="speech-btn" aria-label="Đọc câu ví dụ">🔊 <span>Ví dụ</span></button>
+            <button id="testReadAll" type="button" class="speech-btn" aria-label="Đọc từ rồi ví dụ">▶ <span>Đọc tất cả</span></button>
+            <button id="testStop" type="button" class="speech-btn danger" aria-label="Dừng đọc">■ <span>Dừng</span></button>
+            <span class="speaking-indicator" aria-hidden="true"><span class="speaking-dots"><i></i><i></i><i></i></span> Đang đọc</span>
+          </div>
+        </div>
+
+        <div class="test-actions">
+          <button id="testRevealBtn" class="secondary-btn" type="button" hidden>Xem đáp án</button>
+          <button id="testNextBtn" class="primary-btn" type="button" hidden>Câu tiếp →</button>
+        </div>
+      </section>
+
+      <section id="testResultView" class="view test-result">
+        <div class="complete-icon">✓</div>
+        <h2>Kết quả bài test</h2>
+        <div id="resLabel" class="res-label"></div>
+        <div class="res-score"><strong id="resPercent">0%</strong><span><span id="resCorrect">0</span>/<span id="resTotal">0</span> đúng · <span id="resWrong">0</span> sai</span></div>
+        <div class="res-meta">
+          <div class="res-row"><span>Cấp độ</span><b id="resLevels"></b></div>
+          <div class="res-row"><span>Dạng câu hỏi</span><b id="resTypes"></b></div>
+          <div class="res-row" id="resDurationRow"><span>Thời gian</span><b id="resDuration"></b></div>
+        </div>
+        <div class="res-actions">
+          <button id="testReviewBtn" class="secondary-btn" type="button">Xem lại câu sai</button>
+          <button id="testRedoBtn" class="secondary-btn" type="button">Làm lại bài test</button>
+          <button id="testResultHome" class="primary-btn" type="button">Về trang chủ</button>
+        </div>
+      </section>
+
+      <section id="testReviewView" class="view">
+        <div class="study-head">
+          <button id="testReviewBack" class="icon-btn" type="button" aria-label="Về kết quả">←</button>
+          <div><div class="eyebrow">BÀI TEST</div><strong>Câu sai</strong></div>
+          <span class="head-spacer" aria-hidden="true"></span>
+        </div>
+        <div id="testReviewList" class="test-review-list"></div>
+      </section>
     </main>
   </div>
   <script src="data.js"></script>
@@ -189,5 +297,6 @@
   <script src="auth.js"></script>
   <script src="app.js"></script>
   <script src="sync.js"></script>
+  <script src="test.js"></script>
 </body>
 </html>
