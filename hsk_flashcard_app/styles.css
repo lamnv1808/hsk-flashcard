@@ -29,6 +29,29 @@ h1,h2,h3,p{margin-top:0}.topbar h1{margin:0;font-size:28px}.eyebrow{font-size:12
 .primary-btn{border:0;background:var(--accent);color:#fff;padding:14px 24px;border-radius:15px;font-weight:800;cursor:pointer}
 @media(max-width:720px){.app-shell{padding:16px}.hero{align-items:flex-start;flex-direction:column}.hero-stat{width:100%}.deck-grid{grid-template-columns:repeat(2,1fr)}.stats-grid{grid-template-columns:1fr}.flashcard{height:440px}.rating-area{grid-template-columns:repeat(2,1fr)}}
 
+/* ---------- Phase 21: rich end-of-session completion screen ---------- */
+.complete-breakdown{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;max-width:520px;margin:18px auto 0}
+.cb-cell{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:10px 4px;text-align:center}
+.cb-cell strong{display:block;font-size:22px;line-height:1.1}
+.cb-cell span{display:block;font-size:11px;color:var(--muted);margin-top:4px;overflow-wrap:anywhere}
+.cb-again{border-color:#ef4444}.cb-hard{border-color:#f59e0b}.cb-good{border-color:#22c55e}.cb-easy{border-color:#3b82f6}
+.complete-habit{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;max-width:520px;margin:14px auto 0}
+.ch-item{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:10px 16px;text-align:center;min-width:98px}
+.ch-item strong{display:block;font-size:20px;line-height:1.1}
+.ch-item span{display:block;font-size:11px;color:var(--muted);margin-top:3px}
+.complete-allclear{flex-basis:100%;text-align:center;color:#16a34a;font-weight:800;font-size:16px;margin-bottom:2px}
+.complete-actions{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;max-width:520px;margin:22px auto 0}
+.complete-actions .primary-btn,.complete-actions .secondary-btn{min-width:190px}
+@media(max-width:720px){
+  .complete{padding-top:40px}
+  .complete-breakdown{gap:6px}
+  .cb-cell{padding:9px 3px}
+  .cb-cell strong{font-size:19px}
+  .cb-cell span{font-size:10px}
+  .complete-actions{flex-direction:column}
+  .complete-actions .primary-btn,.complete-actions .secondary-btn{width:100%;min-width:0}
+}
+
 .study-config{display:grid;grid-template-columns:1.5fr 1fr auto;gap:14px;align-items:end;background:var(--panel);border:1px solid var(--line);padding:18px;border-radius:22px;margin-bottom:18px}
 .config-label{display:block;font-size:12px;font-weight:800;color:var(--muted);margin-bottom:9px;text-transform:uppercase;letter-spacing:.08em}
 .level-picker{display:flex;gap:8px;flex-wrap:wrap}

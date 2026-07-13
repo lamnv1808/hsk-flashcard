@@ -82,6 +82,10 @@ let session = [], selectedLevels = settings.selectedLevels || ["HSK1"];
 const sessionSM = window.HSKUtil.createStudySessionStateMachine();
 let sessionState = sessionSM.createInitialState();
 let snapshots = {};   // in-memory per-session-index undo history for SRS (never persisted)
+// Phase 21: transient origin of the current session, used ONLY to gate the completion-screen
+// UX ("Học tiếp" continues a level-based session with the same levels). Never persisted, never
+// synced, never part of sessionState / the state machine / cloud payloads.
+let studySource = null;   // null | {type:"levels", levels:string[]} | {type:"explicit"}
 
 const $ = id => document.getElementById(id);
 
@@ -244,6 +248,7 @@ function updateStreak(){
 }
 
 function startStudy(levels){
+  studySource={ type:"levels", levels:levels.slice() };   // Phase 21: completion-UX gating only
   const sizeSetting=$("sessionSize").value;
   settings.sessionSize=sizeSetting; settings.selectedLevels=levels; saveSettings();
 
@@ -375,14 +380,64 @@ function skipCard(){
 function swipeNext(){ skipCard(); }
 function swipePrev(){ if(sessionState.currentIndex>0){ sessionState=sessionSM.prev(sessionState); renderCard(); } }
 
+// Phase 21: count the session's grades from the authoritative gradesByIndex (no mutation).
+// Values are "again"/"hard"/"good"/"easy"/"skip"; a never-graded hole (undefined) is counted
+// as "ungraded" (does not occur in normal completion, but handled defensively).
+function tallyGrades(gradesByIndex){
+  const c={again:0,hard:0,good:0,easy:0,skip:0,ungraded:0,total:gradesByIndex.length};
+  for(let i=0;i<gradesByIndex.length;i++){
+    const g=gradesByIndex[i];
+    if(g==="again")c.again++; else if(g==="hard")c.hard++; else if(g==="good")c.good++;
+    else if(g==="easy")c.easy++; else if(g==="skip")c.skip++; else c.ungraded++;
+  }
+  return c;
+}
+function cbCell(cls,label,n){ return `<div class="cb-cell ${cls}"><strong>${n}</strong><span>${label}</span></div>`; }
+function chItem(n,label){ return `<div class="ch-item"><strong>${n}</strong><span>${label}</span></div>`; }
+
 function finishSession(){
   stopSpeech();
   $("progressBar").style.width="100%"; showView("completeView");
-  const sessionGrades=sessionState.gradesByIndex;
-  const graded=sessionGrades.filter(x=>x!=="skip");
-  const good=graded.filter(x=>x==="good"||x==="easy").length;
-  const skipped=sessionGrades.filter(x=>x==="skip").length;
-  $("completeText").textContent=`Bạn đã xem ${sessionGrades.length} thẻ, chấm điểm ${graded.length} thẻ, nhớ tốt ${good} thẻ${skipped?`, bỏ qua ${skipped} thẻ`:""}.`;
+  const c=tallyGrades(sessionState.gradesByIndex);
+  const graded=c.again+c.hard+c.good+c.easy;
+  const goodCount=c.good+c.easy;
+  // Existing summary sentence — format unchanged.
+  $("completeText").textContent=`Bạn đã xem ${c.total} thẻ, chấm điểm ${graded} thẻ, nhớ tốt ${goodCount} thẻ${c.skip?`, bỏ qua ${c.skip} thẻ`:""}.`;
+
+  // Grade breakdown grid (counts only; labels mirror the rating buttons).
+  $("completeBreakdown").innerHTML=
+    cbCell("cb-again","Chưa nhớ",c.again)+cbCell("cb-hard","Khó",c.hard)+
+    cbCell("cb-good","Nhớ được",c.good)+cbCell("cb-easy","Rất dễ",c.easy)+
+    cbCell("cb-skip","Bỏ qua",c.skip)+
+    (c.ungraded?cbCell("cb-ungraded","Chưa chấm",c.ungraded):"");
+
+  // Habit row + continue gating. Due-remaining is read AFTER this session's grade writes
+  // (gradeCard writes synchronously before advancing into finishSession) and only for the
+  // selected levels, via the existing dueCards() read — no new query module.
+  const isLevels=studySource && studySource.type==="levels";
+  const dueRemaining=isLevels ? dueCards(studySource.levels).length : 0;
+  const todayLearned=(window.HSKMeta && HSKMeta.dailyCounts()[HSKMeta.localDay()]) || 0;
+  const streak=settingsRepo.getStreak();
+  let habit="";
+  if(isLevels && dueRemaining===0) habit+=`<div class="complete-allclear">Hôm nay tạm ổn rồi 🎉</div>`;
+  if(isLevels && dueRemaining>0) habit+=chItem(dueRemaining,"Còn cần ôn");
+  habit+=chItem(todayLearned,"Đã học hôm nay")+chItem(streak,"Chuỗi ngày");
+  $("completeHabit").innerHTML=habit;
+
+  // "Học tiếp N thẻ": only for level-based sessions that still have due cards. N is the size
+  // of the NEXT batch (min of the current session size and the due-remaining count; all due
+  // when size = "Tất cả thẻ đến hạn"). Clicking reuses the normal startStudy(levels) path.
+  const contBtn=$("continueStudyBtn");
+  if(isLevels && dueRemaining>0){
+    const sizeSetting=$("sessionSize").value;
+    const nextN=sizeSetting==="all" ? dueRemaining : Math.min(parseInt(sizeSetting,10)||dueRemaining, dueRemaining);
+    contBtn.textContent=`Học tiếp ${nextN} thẻ`;
+    contBtn.hidden=false;
+    $("homeBtn").className="secondary-btn";
+  } else {
+    contBtn.hidden=true;
+    $("homeBtn").className="primary-btn";
+  }
 }
 
 function exitStudy(){ stopSpeech(); showView("homeView"); renderHome(); $("startMixedBtn").focus(); }
@@ -438,6 +493,9 @@ $("startMixedBtn").onclick=()=>startStudy(selectedLevels);
 $("sessionSize").onchange=()=>{settings.sessionSize=$("sessionSize").value;saveSettings();};
 $("backBtn").onclick=exitStudy;
 $("homeBtn").onclick=()=>{stopSpeech();showView("homeView");renderHome()};
+// Phase 21: "Học tiếp" — restart a level-based session with the same selected levels via the
+// normal startStudy path (existing session size, fresh selection, next card front-side).
+$("continueStudyBtn").onclick=()=>{ if(studySource && studySource.type==="levels"){ stopSpeech(); startStudy(studySource.levels); } };
 $("shuffleBtn").onclick=()=>{session.sort(()=>Math.random()-.5);sessionState=sessionSM.startSession({cardIds:session.map(c=>c.id)});snapshots={};renderCard()};
 
 // Click the Chinese word / example to hear it (without flipping the card, and not after a drag).
@@ -521,6 +579,7 @@ window.HSK_APP = {
     // resolve ids in requested order, dedup, skip missing).
     const list=studyEngine.buildExplicitSession({ cardIds: ids }).cards;
     if(!list.length) return false;
+    studySource={ type:"explicit" };   // Phase 21: no same-level "Học tiếp" for explicit sessions
     session=list; sessionState=sessionSM.startSession({ cardIds: list.map(c=>c.id) }); snapshots={};
     // Deactivate any non-core view (Weak Words / Bookmarks / etc.) before entering
     // Study Mode, since showView() only manages home/study/complete.
