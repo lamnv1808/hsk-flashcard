@@ -11,14 +11,17 @@
   "use strict";
   var $ = function (id) { return document.getElementById(id); };
   function S() { return (window.HSK_APP && window.HSK_APP.getSettings()) || {}; }
+  var MQ = window.HSKUtil.userMetadata;   // shared read-only UserMetadataQuery (Phase 7)
   function persist() { if (window.saveSettings) window.saveSettings(); }
   function curCard() { return window.currentCard ? window.currentCard() : null; }
   function trim(x) { return String(x == null ? "" : x).trim(); }
   function localDay(d) { return window.HSKUtil.date.localDay(d); }   // delegates to core/util/date.js
 
   /* ---------------- bookmarks ---------------- */
-  function bookmarks() { var s = S(); return Array.isArray(s.bookmarks) ? s.bookmarks : []; }
-  function isBookmarked(id) { return bookmarks().indexOf(id) >= 0; }
+  // Reads delegate to the read-only UserMetadataQuery (Phase 7). Writes below
+  // still mutate S() directly + persist(); the query observes them live.
+  function bookmarks() { return MQ.getBookmarkIds(); }
+  function isBookmarked(id) { return MQ.isBookmarked(id); }
   function toggleBookmark(id) {
     var s = S(); if (!Array.isArray(s.bookmarks)) s.bookmarks = [];
     var i = s.bookmarks.indexOf(id);
@@ -29,9 +32,9 @@
   function removeBookmark(id) { var s = S(); if (Array.isArray(s.bookmarks)) { var i = s.bookmarks.indexOf(id); if (i >= 0) { s.bookmarks.splice(i, 1); persist(); } } }
 
   /* ---------------- notes (plain text) ---------------- */
-  function notesMap() { var s = S(); return (s.notes && typeof s.notes === "object") ? s.notes : {}; }
-  function getNote(id) { var n = notesMap()[id]; return n ? String(n) : ""; }
-  function hasNote(id) { return trim(getNote(id)) !== ""; }
+  function notesMap() { return MQ.getNotesMap(); }
+  function getNote(id) { return MQ.getNote(id); }
+  function hasNote(id) { return MQ.hasNote(id); }
   function setNote(id, text) {
     var s = S(); if (!s.notes || typeof s.notes !== "object") s.notes = {};
     var t = trim(text);

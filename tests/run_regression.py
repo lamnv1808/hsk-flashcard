@@ -35,6 +35,9 @@ GROUPS = {
     "AnalyticsQuery (Phase 6)": [
         "tests/browser/test_analytics_query.py",
     ],
+    "UserMetadataQuery (Phase 7)": [
+        "tests/browser/test_user_metadata_query.py",
+    ],
     "Data & contracts": [
         "tests/data/test_card_stability.py",
         "tests/data/test_baseline_comparison.py",

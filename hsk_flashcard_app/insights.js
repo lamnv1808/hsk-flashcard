@@ -9,6 +9,7 @@
   var CARDS = window.HSK_CARDS || [];
   var repo = window.HSKUtil.cards;   // shared read-only CardRepository (built once)
   var ANALYTICS = window.HSKUtil.analytics;   // shared read-only AnalyticsQuery (Phase 6)
+  var MQ = window.HSKUtil.userMetadata;   // shared read-only UserMetadataQuery (Phase 7)
   var LEVELS = window.HSKUtil.levels.levelsFromCards(CARDS);
   function trim(x) { return String(x == null ? "" : x).trim(); }
   function setActive(id) { document.querySelectorAll(".view").forEach(function (v) { v.classList.toggle("active", v.id === id); }); }
@@ -126,10 +127,9 @@
   function showInsights() { setActive("insightsView"); $("insightsView").scrollTop = 0; renderInsights(); renderChart(); }
 
   /* ---------------- Bookmarks page ---------------- */
-  function bookmarkCards() {
-    var ids = (window.HSKMeta && HSKMeta.bookmarks()) || [];
-    return repo.getManyByIds(ids.map(Number));   // requested order, skips missing (as before)
-  }
+  // Bookmark-card resolution now via the read-only UserMetadataQuery (Phase 7):
+  // requested (insertion) order, numeric ids, skips missing — unchanged.
+  function bookmarkCards() { return MQ.getBookmarkedCards(); }
   function renderBookmarks() {
     var level = $("bmLevel").value, q = trim($("bmSearch").value).toLowerCase();
     var list = bookmarkCards().filter(function (c) {
@@ -173,7 +173,7 @@
   var bl = $("bmLevel"); if (bl) bl.onchange = renderBookmarks;
   var bs = $("bmSearch"); if (bs) bs.oninput = renderBookmarks;
   on("bmStudyBtn", function () {
-    var ids = bookmarkCards().filter(function (c) { return $("bmLevel").value === "all" || c.level === $("bmLevel").value; }).map(function (c) { return c.id; });
+    var ids = MQ.getBookmarkedCards({ level: $("bmLevel").value }).map(function (c) { return c.id; });
     studyIds(ids);
   });
 
