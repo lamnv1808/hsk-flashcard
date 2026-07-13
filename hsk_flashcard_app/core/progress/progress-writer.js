@@ -39,6 +39,10 @@
     var save = (typeof deps.save === "function") ? deps.save : function () {};
     var markDirty = (typeof deps.markDirty === "function") ? deps.markDirty : function () {};
     var getNow = (typeof deps.dateProvider === "function") ? deps.dateProvider : function () { return new Date(); };
+    // reset-only deps: replaceProgress reassigns the controller's live progress binding;
+    // onReset is the existing (sync-guarded) reset callback. Both injected by app.js.
+    var replaceProgress = (typeof deps.replaceProgress === "function") ? deps.replaceProgress : null;
+    var onReset = (typeof deps.onReset === "function") ? deps.onReset : function () {};
 
     // Grade transaction — preserves the exact current order of operations
     // (read -> srs -> assign -> save -> markDirty). Returns the states for callers/tests;
@@ -88,7 +92,21 @@
       return { cardId: cardId, hadState: !!args.hadState };
     }
 
-    return { grade: grade, restore: restore };
+    // Global progress reset transaction (Phase 14): replace the active progress object
+    // with a fresh empty {} -> save() -> existing onReset callback. The exact block from
+    // resetBtn. The controller still owns the confirmation dialog and UI refresh.
+    // O(1): a single object replacement (no per-row loop, no per-card dirty events).
+    //   replace progress with {} -> save() -> onReset()   (exactly one of each)
+    function reset() {
+      if (!replaceProgress) return null;          // needs the controller's reassign hook
+      var next = {};
+      replaceProgress(next);                       // app.js: progress = next  (new empty object)
+      save();                                      // persist the empty state (serializes {})
+      onReset();                                    // existing sync-guarded reset (fire-and-forget)
+      return { cleared: true };
+    }
+
+    return { grade: grade, restore: restore, reset: reset };
   }
 
   NS.createProgressWriter = createProgressWriter;

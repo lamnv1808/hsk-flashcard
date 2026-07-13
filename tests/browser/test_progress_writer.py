@@ -351,6 +351,126 @@ def main():
         for k in ["localOnly", "isolation", "nullGuard"]:
             check("restoreMisc:" + k, rmisc[k])
 
+        # ==== PHASE 14: reset (global progress reset) ====
+
+        # ---- CHARACTERIZATION: inline reset vs writer.reset (populated + empty) ----
+        rst = pg.evaluate("""()=>{
+          function mkResetWriter(holder, counts){
+            return HSKUtil.createProgressWriter({
+              progressProvider: function(){ return holder.prog; },
+              progressRepository: HSKUtil.createProgressRepository({ progressProvider: function(){ return holder.prog; } }),
+              srsCalculator: __srs,
+              save: function(){ counts.save++; },
+              markDirty: function(){ counts.dirty++; },
+              replaceProgress: function(next){ holder.prog = next; },
+              onReset: function(){ counts.onReset++; },
+              dateProvider: __fixedNow()
+            });
+          }
+          function scen(startProg){
+            // inline original: progress={}; save(); onReset()
+            var oldHolder={prog: JSON.parse(JSON.stringify(startProg))};
+            var oc={save:0,onReset:0};
+            oldHolder.prog={}; oc.save++; oc.onReset++;
+            // writer
+            var wHolder={prog: JSON.parse(JSON.stringify(startProg))};
+            var wc={save:0,dirty:0,onReset:0};
+            var w=mkResetWriter(wHolder, wc);
+            var oldRef=wHolder.prog;
+            var res=w.reset();
+            return {
+              progEqual: JSON.stringify(wHolder.prog)===JSON.stringify(oldHolder.prog),
+              becameEmpty: JSON.stringify(wHolder.prog)==='{}',
+              newObject: wHolder.prog!==oldRef,
+              save1: wc.save===1, onReset1: wc.onReset===1, noPerCardDirty: wc.dirty===0,
+              ret: res && res.cleared===true
+            };
+          }
+          return { populated: scen({1:{due:'x',interval:3,reps:2,correct:1,attempts:2},2:{due:'y',interval:1,reps:1,correct:0,attempts:1}}),
+                   empty: scen({}) };
+        }""")
+        for st in ["populated", "empty"]:
+            for k in ["progEqual", "becameEmpty", "newObject", "save1", "onReset1", "noPerCardDirty", "ret"]:
+                check("reset char " + st + ":" + k, rst[st][k])
+
+        # ---- READ OBSERVABILITY: repo/analytics/session observe the empty object ----
+        obs = pg.evaluate("""()=>{
+          var holder={prog:{1:{due:'2020-01-01',interval:6,reps:4,correct:3,attempts:4},2:{due:'2020-01-01',interval:2,reps:1,correct:1,attempts:1}}};
+          var repo=HSKUtil.createProgressRepository({progressProvider:function(){return holder.prog;}});
+          // analytics + session over the SAME live provider
+          var cards=[]; for(var i=1;i<=10;i++) cards.push({id:i,level:'HSK1',word:'w'+i,pinyin:'p'+i,meaning:'m'+i});
+          var cardRepo=HSKUtil.createCardRepository(cards);
+          var analytics=HSKUtil.createAnalyticsQuery({cardRepository:cardRepo, progressRepository:repo,
+            settingsRepository:{getStreak:function(){return 0;}}, dailyCountsProvider:function(){return {};}, dateProvider:function(){return new Date(2026,6,13,9,0,0);}});
+          var session=HSKUtil.createStudySessionQuery({cardRepository:cardRepo, progressRepository:repo, dateProvider:function(){return '2026-07-13';}, randomProvider:function(){return 0.5;}});
+          var beforeLearned=analytics.getHomeSummary(['HSK1']).learned;   // 2 (reps>0)
+          var w=HSKUtil.createProgressWriter({ progressProvider:function(){return holder.prog;},
+            progressRepository:repo, srsCalculator:__srs, save:function(){}, markDirty:function(){},
+            replaceProgress:function(n){holder.prog=n;}, onReset:function(){}, dateProvider:__fixedNow() });
+          w.reset();
+          var h=analytics.getHomeSummary(['HSK1']);
+          return {
+            beforeLearned2: beforeLearned===2,
+            count0: repo.count()===0, ids0: repo.getCardIds().length===0,
+            has1False: repo.has(1)===false,
+            defaultAfter: JSON.stringify(repo.getOrDefault(1,'2026-07-13'))===JSON.stringify({due:'2026-07-13',interval:0,reps:0,correct:0,attempts:0}),
+            analyticsZero: h.learned===0 && h.attempts===0 && h.correct===0,
+            weakEmpty: analytics.getWeakWords('all').length===0,
+            smartInsufficient: analytics.getSmartReviewModel().hasData===false,
+            // all selected cards fresh -> standard session returns them (all due today, reps 0)
+            sessionAllFresh: session.selectStandardSession({levels:['HSK1'],limit:5}).length===5
+          };
+        }""")
+        for k in ["beforeLearned2", "count0", "ids0", "has1False", "defaultAfter", "analyticsZero", "weakEmpty", "smartInsufficient", "sessionAllFresh"]:
+            check("resetObs:" + k, obs[k])
+
+        # ---- LOCAL-ONLY (no onReset) + account isolation + guard ----
+        rmisc2 = pg.evaluate("""()=>{
+          // local-only: onReset wrapper is a no-op (HSKSync absent)
+          var holder={prog:{1:{due:'x',interval:2,reps:1,correct:1,attempts:1}}}, saves=0, resets=0;
+          var w=HSKUtil.createProgressWriter({ progressProvider:function(){return holder.prog;},
+            progressRepository:HSKUtil.createProgressRepository({progressProvider:function(){return holder.prog;}}),
+            srsCalculator:__srs, save:function(){saves++;}, markDirty:function(){},
+            replaceProgress:function(n){holder.prog=n;}, onReset:function(){ if(false) resets++; }, dateProvider:__fixedNow() });
+          w.reset();
+          var localOnly = saves===1 && resets===0 && JSON.stringify(holder.prog)==='{}';
+          // account isolation: reset A must not touch B
+          var A={prog:{1:{due:'x',interval:3,reps:1,correct:1,attempts:1}}};
+          var B={prog:{2:{due:'y',interval:1,reps:1,correct:1,attempts:1}}};
+          var active={who:A};
+          var w2=HSKUtil.createProgressWriter({ progressProvider:function(){return active.who.prog;},
+            progressRepository:HSKUtil.createProgressRepository({progressProvider:function(){return active.who.prog;}}),
+            srsCalculator:__srs, save:function(){}, markDirty:function(){},
+            replaceProgress:function(n){active.who.prog=n;}, onReset:function(){}, dateProvider:__fixedNow() });
+          w2.reset();  // resets A
+          var isolation = JSON.stringify(A.prog)==='{}' && ('2' in B.prog) && Object.keys(B.prog).length===1;
+          // guard: no replaceProgress -> reset returns null, no throw
+          var w3=HSKUtil.createProgressWriter({ progressProvider:function(){return {};}, srsCalculator:__srs, save:function(){}, markDirty:function(){}, dateProvider:__fixedNow() });
+          var guard = w3.reset()===null;
+          return { localOnly, isolation, guard };
+        }""")
+        for k in ["localOnly", "isolation", "guard"]:
+            check("resetMisc:" + k, rmisc2[k])
+
+        # ---- NO UNRELATED SIDE EFFECTS: writer.reset touches only progress via callbacks ----
+        rse = pg.evaluate("""()=>{
+          var before={}; for(var i=0;i<localStorage.length;i++){var k=localStorage.key(i); before[k]=localStorage.getItem(k);}
+          var beforeLen=localStorage.length;
+          var holder={prog:{1:{due:'x',interval:2,reps:1,correct:1,attempts:1}}};
+          var w=HSKUtil.createProgressWriter({ progressProvider:function(){return holder.prog;},
+            progressRepository:HSKUtil.createProgressRepository({progressProvider:function(){return holder.prog;}}),
+            srsCalculator:__srs, save:function(){}, markDirty:function(){},
+            replaceProgress:function(n){holder.prog=n;}, onReset:function(){}, dateProvider:__fixedNow() });
+          w.reset();
+          var after={}; for(var q=0;q<localStorage.length;q++){var kk=localStorage.key(q); after[kk]=localStorage.getItem(kk);}
+          var unchanged=localStorage.length===beforeLen;
+          for(var bb in before){ if(before[bb]!==after[bb]) unchanged=false; }
+          for(var aa in after){ if(!(aa in before)) unchanged=false; }
+          return { storageUntouchedByWriter: unchanged, cleared: JSON.stringify(holder.prog)==='{}' };
+        }""")
+        for k in ["storageUntouchedByWriter", "cleared"]:
+            check("resetSideEffect:" + k, rse[k])
+
         result = {"suite": "progress_writer", "pass": len(fails) == 0 and len(errs) == 0, "fails": fails, "errors": errs}
         print(json.dumps(result, ensure_ascii=False))
         b.close()

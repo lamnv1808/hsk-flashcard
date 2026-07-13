@@ -32,7 +32,12 @@ const progressWriter = window.HSKUtil.createProgressWriter({
   srsCalculator: srsNextState,
   save: save,
   markDirty: (id) => { if(window.HSKSync) HSKSync.markDirty(id); },
-  dateProvider: () => new Date()
+  dateProvider: () => new Date(),
+  // reset transaction (Phase 14): replaceProgress reassigns the live `progress` binding
+  // (so every read consumer observes the new empty object); onReset is the existing
+  // sync-guarded callback. Both stay owned by the controller; the writer just orchestrates.
+  replaceProgress: (next) => { progress = next; },
+  onReset: () => { if(window.HSKSync) HSKSync.onReset(); }
 });
 // Read-only Study session card-SELECTION seam (Phase 5). Owns no session state:
 // it only reads cards/progress/date/random and returns the card list to seed a
@@ -472,7 +477,7 @@ if(!speech.supported){
 } else {
   $("speechUnsupported").style.display="none";
 }
-$("resetBtn").onclick=()=>{if(confirm("Xóa toàn bộ tiến độ học?")){progress={};save();if(window.HSKSync)HSKSync.onReset();renderHome();}};
+$("resetBtn").onclick=()=>{if(confirm("Xóa toàn bộ tiến độ học?")){progressWriter.reset();renderHome();}};   // reset transaction (replace->save->onReset) owned by ProgressWriter (Phase 14)
 $("themeBtn").onclick=()=>{document.body.classList.toggle("dark");settings.dark=document.body.classList.contains("dark");saveSettings();};
 if(settings.dark)document.body.classList.add("dark");
 // Lock the study screen to the real visible height (robust dvh alternative for iOS/dynamic toolbars).
