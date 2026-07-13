@@ -344,12 +344,13 @@ function gradeCard(grade){
 }
 
 function skipCard(){
-  if(("i"+current) in snapshots){  // this position was graded before -> undo its SRS effect
-    const sid=snapshots["i"+current].id;
-    revertSnapshot(current);
-    delete snapshots["i"+current];
-    save();
-    if(window.HSKSync) HSKSync.markDirty(sid);
+  const k="i"+current;
+  if(k in snapshots){  // this position was graded before -> undo its SRS effect
+    const snap=snapshots[k];
+    delete snapshots[k];
+    // Restore/delete + save + markDirty owned by ProgressWriter (Phase 13). Snapshot map,
+    // session index, sessionGrades and navigation stay controller-owned below.
+    progressWriter.restore({ cardId: snap.id, hadState: snap.had, previousState: snap.state });
   }
   sessionGrades[current]="skip";
   current++;

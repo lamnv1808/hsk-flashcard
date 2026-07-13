@@ -70,7 +70,25 @@
       return { cardId: cardId, grade: g, previousState: previousState, nextState: next };
     }
 
-    return { grade: grade };
+    // Undo/skip restore transaction (Phase 13): apply the previous per-card persistence
+    // state, then persist + notify sync — the exact block from skipCard's revert path.
+    // The controller still owns the snapshot map, session index, navigation and UI.
+    //   hadState=true  -> restore the previous row (deep clone, as revertSnapshot did)
+    //   hadState=false -> delete the row created by the grade (NOT a default row)
+    // Preserves order: restore/delete -> save() -> markDirty(cardId). Exactly one each.
+    function restore(args) {
+      args = args || {};
+      var cardId = args.cardId;
+      if (cardId == null) return null;            // no partial mutation
+      var prog = getProgress();
+      if (args.hadState) prog[cardId] = JSON.parse(JSON.stringify(args.previousState));
+      else delete prog[cardId];
+      save();
+      markDirty(cardId);
+      return { cardId: cardId, hadState: !!args.hadState };
+    }
+
+    return { grade: grade, restore: restore };
   }
 
   NS.createProgressWriter = createProgressWriter;

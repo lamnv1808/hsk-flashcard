@@ -229,6 +229,128 @@ def main():
         for k in ["storageUntouchedByWriter", "saves25", "dirty25", "rows25"]:
             check("sideEffect:" + k, se[k])
 
+        # ==== PHASE 13: restore (undo/skip) ====
+
+        # ---- CHARACTERIZATION: inline skip restore/delete vs writer.restore ----
+        # faithful copy of skipCard's persistence transaction (revert-or-delete -> save -> markDirty)
+        rc = pg.evaluate("""()=>{
+          function oldRestore(prog, snap){                 // snap = {id, had, state}
+            var counts={save:0,dirty:0};
+            if(snap.had) prog[snap.id]=JSON.parse(JSON.stringify(snap.state));
+            else delete prog[snap.id];
+            counts.save++; counts.dirty++;                 // save(); markDirty(sid)
+            return counts;
+          }
+          function scen(startRow){
+            // simulate: capture snapshot, grade, then undo
+            var progA = startRow ? { 5: JSON.parse(JSON.stringify(startRow)) } : {};
+            var progB = startRow ? { 5: JSON.parse(JSON.stringify(startRow)) } : {};
+            var had = startRow != null;
+            var snapState = had ? JSON.parse(JSON.stringify(startRow)) : null;
+            // grade both (mutates row / creates row)
+            __mkWriter(progA, __fixedNow()).w.grade({cardId:5, grade:'good'});
+            var mkB = __mkWriter(progB, __fixedNow()); mkB.w.grade({cardId:5, grade:'good'});
+            // undo: old inline vs writer.restore
+            var oc = oldRestore(progA, {id:5, had:had, state:snapState});
+            var mkR = __mkWriter(progB, __fixedNow());
+            mkR.w.restore({cardId:5, hadState:had, previousState:snapState});
+            return { progEqual: JSON.stringify(progB)===JSON.stringify(progA),
+                     save1: mkR.counts.save===1, dirty1: mkR.counts.dirty===1 };
+          }
+          return { learned: scen({due:'2020-01-01',interval:6,reps:4,correct:3,attempts:4}),
+                   untouched: scen(null) };
+        }""")
+        for st in ["learned", "untouched"]:
+            check("restore char " + st + ":prog", rc[st]["progEqual"])
+            check("restore char " + st + ":save1", rc[st]["save1"])
+            check("restore char " + st + ":dirty1", rc[st]["dirty1"])
+
+        # ---- RESTORE EXISTING ROW: exact field restoration ----
+        rex = pg.evaluate("""()=>{
+          var learned={due:'2020-01-01', interval:6, reps:4, correct:3, attempts:4};
+          var prog={ 5: JSON.parse(JSON.stringify(learned)), 9:{due:'2021-01-01',interval:2,reps:1,correct:1,attempts:1} };
+          var other=JSON.stringify(prog[9]);
+          var mk=__mkWriter(prog, __fixedNow());
+          mk.w.grade({cardId:5, grade:'easy'});                 // mutate 5
+          var mutated=JSON.stringify(prog[5])!==JSON.stringify(learned);
+          mk.w.restore({cardId:5, hadState:true, previousState:learned});
+          return { mutated, restoredExact: JSON.stringify(prog[5])===JSON.stringify(learned),
+                   otherUnchanged: JSON.stringify(prog[9])===other,
+                   save2: mk.counts.save===2, dirty2: mk.counts.dirty===2 };  // grade + restore
+        }""")
+        for k in ["mutated", "restoredExact", "otherUnchanged", "save2", "dirty2"]:
+            check("restoreExisting:" + k, rex[k])
+
+        # ---- DELETE NEW ROW: undo of an untouched-card grade removes the row ----
+        rdel = pg.evaluate("""()=>{
+          var prog={}; var mk=__mkWriter(prog, __fixedNow());
+          var repo=HSKUtil.createProgressRepository({progressProvider:function(){return prog;}});
+          mk.w.grade({cardId:7, grade:'good'});
+          var created=repo.has(7)===true;
+          mk.w.restore({cardId:7, hadState:false, previousState:null});
+          return { created, deleted: repo.has(7)===false && !('7' in prog),
+                   defaultAfter: JSON.stringify(repo.getOrDefault(7,'2026-07-13'))===JSON.stringify({due:'2026-07-13',interval:0,reps:0,correct:0,attempts:0}),
+                   save2: mk.counts.save===2, dirty2: mk.counts.dirty===2 };
+        }""")
+        for k in ["created", "deleted", "defaultAfter", "save2", "dirty2"]:
+            check("restoreDelete:" + k, rdel[k])
+
+        # ---- SEQUENCES: each grade -> undo -> back to pre-state; grade->undo->grade ----
+        rseq = pg.evaluate("""()=>{
+          function gradeUndo(startRow, grade){
+            var prog = startRow ? { 1: JSON.parse(JSON.stringify(startRow)) } : {};
+            var had = startRow != null; var snap = had ? JSON.parse(JSON.stringify(startRow)) : null;
+            var mk=__mkWriter(prog, __fixedNow());
+            mk.w.grade({cardId:1, grade:grade});
+            mk.w.restore({cardId:1, hadState:had, previousState:snap});
+            return had ? JSON.stringify(prog[1])===JSON.stringify(startRow) : !('1' in prog);
+          }
+          var learned={due:'2020-01-01',interval:6,reps:4,correct:3,attempts:4};
+          // grade -> undo -> grade again (fresh row created again)
+          var prog={}; var mk=__mkWriter(prog, __fixedNow());
+          mk.w.grade({cardId:2, grade:'good'}); mk.w.restore({cardId:2, hadState:false, previousState:null});
+          var goneAfterUndo=!('2' in prog);
+          mk.w.grade({cardId:2, grade:'hard'});
+          var regraded=prog[2].reps===1 && prog[2].interval===1;
+          return {
+            untouchedGood:gradeUndo(null,'good'), untouchedAgain:gradeUndo(null,'again'),
+            untouchedHard:gradeUndo(null,'hard'), untouchedEasy:gradeUndo(null,'easy'),
+            learnedGood:gradeUndo(learned,'good'),
+            goneAfterUndo, regraded
+          };
+        }""")
+        for k in ["untouchedGood", "untouchedAgain", "untouchedHard", "untouchedEasy", "learnedGood", "goneAfterUndo", "regraded"]:
+            check("restoreSeq:" + k, rseq[k])
+
+        # ---- RESTORE local-only (no dirty) + account isolation + null guard ----
+        rmisc = pg.evaluate("""()=>{
+          // local-only
+          var prog={5:{due:'2020-01-01',interval:2,reps:1,correct:1,attempts:1}}, saves=0, dirty=0;
+          var w=HSKUtil.createProgressWriter({ progressProvider:function(){return prog;},
+            progressRepository:HSKUtil.createProgressRepository({progressProvider:function(){return prog;}}),
+            srsCalculator:__srs, save:function(){saves++;}, markDirty:function(id){ if(false) dirty++; }, dateProvider:__fixedNow() });
+          w.restore({cardId:5, hadState:false, previousState:null});
+          var localOnly = saves===1 && dirty===0 && !('5' in prog);
+          // account isolation
+          var A={1:{due:'2020-01-01',interval:3,reps:1,correct:1,attempts:1}}, B={};
+          var active={who:A};
+          var w2=HSKUtil.createProgressWriter({ progressProvider:function(){return active.who;},
+            progressRepository:HSKUtil.createProgressRepository({progressProvider:function(){return active.who;}}),
+            srsCalculator:__srs, save:function(){}, markDirty:function(){}, dateProvider:__fixedNow() });
+          active.who=B; w2.restore({cardId:9, hadState:false, previousState:null});  // affects B only
+          var isolation = !('9' in A) && Object.keys(A).length===1 && ('1' in A);
+          // null cardId -> no mutation
+          var prog3={3:{due:'x',interval:1,reps:1,correct:1,attempts:1}}, snap=JSON.stringify(prog3), s3=0,d3=0;
+          var w3=HSKUtil.createProgressWriter({ progressProvider:function(){return prog3;},
+            progressRepository:HSKUtil.createProgressRepository({progressProvider:function(){return prog3;}}),
+            srsCalculator:__srs, save:function(){s3++;}, markDirty:function(){d3++;}, dateProvider:__fixedNow() });
+          var nullRes=w3.restore({cardId:null, hadState:true, previousState:{}});
+          var nullGuard = nullRes===null && JSON.stringify(prog3)===snap && s3===0 && d3===0;
+          return { localOnly, isolation, nullGuard };
+        }""")
+        for k in ["localOnly", "isolation", "nullGuard"]:
+            check("restoreMisc:" + k, rmisc[k])
+
         result = {"suite": "progress_writer", "pass": len(fails) == 0 and len(errs) == 0, "fails": fails, "errors": errs}
         print(json.dumps(result, ensure_ascii=False))
         b.close()
