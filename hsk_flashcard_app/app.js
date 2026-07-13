@@ -11,6 +11,11 @@ const stateKey = AUTH.progressKey || "hsk_flashcard_progress_v2";
 const settingsKey = AUTH.settingsKey || "hsk_flashcard_settings_v2";
 let progress = JSON.parse(localStorage.getItem(stateKey) || "{}");
 let settings = JSON.parse(localStorage.getItem(settingsKey) || "{}");
+// Read-only settings accessor (Phase 4). Bound to a provider over the LIVE
+// `settings` binding, so it observes reloadState() reassignments after a cloud
+// pull and is usable during the first renderHome() (before HSK_APP exists).
+// It never writes/marks-dirty; the existing write path (saveSettings) is unchanged.
+const settingsRepo = window.HSKUtil.createSettingsRepository(() => settings);
 let session = [], current = 0, selectedLevels = settings.selectedLevels || ["HSK1"], flipped = false, sessionGrades = [];
 let snapshots = {};   // in-memory per-session-index undo history for SRS (never persisted)
 
@@ -144,11 +149,11 @@ function renderLevelPicker(){
 
 function renderHome(){
   renderLevelPicker();
-  $("sessionSize").value=settings.sessionSize || "20";
-  $("speechRate").value=String(normSpeechRate(settings.speechRate));
-  $("autoReadWord").checked=!!settings.autoReadWord;
-  $("autoReadExample").checked=!!settings.autoReadExample;
-  $("showFrontPinyin").checked=settings.showFrontPinyin!==false;   // default on
+  $("sessionSize").value=settingsRepo.getSessionSize();
+  $("speechRate").value=String(settingsRepo.getSpeechRate());
+  $("autoReadWord").checked=settingsRepo.getAutoReadWordEnabled();
+  $("autoReadExample").checked=settingsRepo.getAutoReadExampleEnabled();
+  $("showFrontPinyin").checked=settingsRepo.getFrontPinyinEnabled();   // default on
   $("totalWords").textContent=cardRepo.count().toLocaleString("vi-VN");   // total vocab count, automatic
   const grid=$("deckGrid"); grid.innerHTML="";
   LEVELS.forEach(level=>{
@@ -165,7 +170,7 @@ function renderHome(){
   const correct=Object.values(progress).reduce((s,x)=>s+(x.correct||0),0);
   $("learnedStat").textContent=learned;
   $("retentionStat").textContent=attempts?Math.round(correct/attempts*100)+"%":"0%";
-  $("streakStat").textContent=settings.streak||0;
+  $("streakStat").textContent=settingsRepo.getStreak();
   $("dueCount").textContent=dueCards(LEVELS).length;
 }
 
@@ -198,7 +203,7 @@ function startStudy(levels){
 // Vocab pinyin (column C): shown on the FRONT by default; when the setting is off it
 // moves to the back (above the meaning). Never both sides; example pinyin is untouched.
 function applyPinyinDisplay(){
-  const showFP = settings.showFrontPinyin !== false;   // undefined => true (existing users unchanged)
+  const showFP = settingsRepo.getFrontPinyinEnabled();   // undefined => true (existing users unchanged)
   $("pinyin").style.display = showFP ? "" : "none";
   $("backWordBlock").style.display = showFP ? "none" : "";
   $("flashcard").classList.toggle("no-front-pinyin", !showFP);  // lets CSS fit the denser back on mobile
@@ -235,7 +240,7 @@ function renderCard(){
   $("flashcard").setAttribute("aria-label",`Thẻ ${current+1}/${session.length}. Từ: ${c.word}. Bấm hoặc nhấn Space để xem nghĩa.`);
   $("srStatus").textContent=`Thẻ ${current+1} trên ${session.length}. ${c.level}: ${c.word}.`;
   stopSpeech();                       // always stop audio when the card changes
-  if(settings.autoReadWord) speakWord();
+  if(settingsRepo.getAutoReadWordEnabled()) speakWord();
   $("flashcard").focus({preventScroll:true});   // keep keyboard focus without scroll jumps
 }
 
@@ -249,7 +254,7 @@ function flipCard(){
     $("flashcard").setAttribute("aria-label",flipped?`Đáp án. Nghĩa: ${c.meaning}. Bấm để lật lại.`:`Từ: ${c.word}. Bấm để xem nghĩa.`);
     $("srStatus").textContent=flipped?`Nghĩa: ${c.meaning}.`:`Từ: ${c.word}.`;
   }
-  if(flipped){ stopSpeech(); if(settings.autoReadExample) speakExample(); } else stopSpeech();
+  if(flipped){ stopSpeech(); if(settingsRepo.getAutoReadExampleEnabled()) speakExample(); } else stopSpeech();
   if(window.HSKMeta) HSKMeta.onFlip(flipped);   // note zone shows only on the back side
 }
 

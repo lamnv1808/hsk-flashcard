@@ -140,7 +140,7 @@
     rows.push(["Đã học hôm nay", String(dc[HSKMeta.localDay()] || 0)]);
     rows.push(["Đã học 7 ngày qua", String(sumDays(dc, 7))]);
     rows.push(["Đã học 30 ngày qua", String(sumDays(dc, 30))]);
-    var streak = (window.HSK_APP && HSK_APP.getSettings().streak) || 0;
+    var streak = window.HSKUtil.settings.getStreak();   // read-only settings accessor (Phase 4)
     rows.push(["Chuỗi ngày hiện tại", String(streak)]);
 
     rows.forEach(function (r) {

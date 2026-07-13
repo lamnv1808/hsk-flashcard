@@ -26,6 +26,9 @@ GROUPS = {
     "CardRepository (Phase 3)": [
         "tests/browser/test_card_repository.py",
     ],
+    "SettingsRepository (Phase 4)": [
+        "tests/browser/test_settings_repository.py",
+    ],
     "Data & contracts": [
         "tests/data/test_card_stability.py",
         "tests/data/test_baseline_comparison.py",
