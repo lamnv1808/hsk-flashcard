@@ -61,6 +61,19 @@ const analytics = window.HSKUtil.createAnalyticsQuery({
   dailyCountsProvider: () => (window.HSKMeta && window.HSKMeta.dailyCounts()) || {},
   dateProvider: () => new Date()
 });
+// Read-only Study session/card read-model engine (Phase 16): composes the seams to
+// build sessions (delegating to StudySessionQuery) and describe session/card read
+// models. Owns NO mutable state and no DOM — app.js still owns session/current/flip/
+// snapshots/rendering. today() is hoisted below.
+const studyEngine = window.HSKUtil.createStudySessionEngine({
+  contentPack: window.HSKUtil.contentPack,
+  cardRepository: cardRepo,
+  progressRepository: progressRepo,
+  settingsRepository: settingsRepo,
+  studySessionQuery: sessionQuery,
+  userMetadataQuery: window.HSKUtil.userMetadata,
+  dateProvider: () => today()
+});
 let session = [], current = 0, selectedLevels = settings.selectedLevels || ["HSK1"], flipped = false, sessionGrades = [];
 let snapshots = {};   // in-memory per-session-index undo history for SRS (never persisted)
 
@@ -228,9 +241,10 @@ function startStudy(levels){
   const sizeSetting=$("sessionSize").value;
   settings.sessionSize=sizeSetting; settings.selectedLevels=levels; saveSettings();
 
-  // Read-only selection (Phase 5): due -> fresh(not-in-due) -> random fallback if empty.
-  // app.js still owns the mutable session state, streak write, view + first render.
-  session=sessionQuery.selectStandardSession({ levels, limit: sizeSetting==="all"?"all":Number(sizeSetting) });
+  // Read-only construction via StudySessionEngine (Phase 16; delegates to StudySessionQuery
+  // Phase 5: due -> fresh(not-in-due) -> random fallback). app.js still owns the mutable
+  // session state, streak write, view + first render.
+  session=studyEngine.buildSession({ levels, sessionSize: sizeSetting }).cards;
 
   current=0; sessionGrades=[]; snapshots={}; updateStreak(); showView("studyView"); renderCard();
 }
@@ -261,9 +275,11 @@ function renderCard(){
   $("logicPanel").classList.add("hidden");
   $("sheetBackdrop").classList.add("hidden");
   $("flipHint").textContent="Bấm vào thẻ để lật";
-  $("studyLevel").textContent=[...new Set(session.map(x=>x.level))].join(" + ");
-  $("cardIndex").textContent=current+1; $("cardTotal").textContent=session.length;
-  $("progressBar").style.width=((current/session.length)*100)+"%";
+  // Read-only session description (Phase 16). app.js still formats the DOM below.
+  const desc=studyEngine.describeSession({ cards: session, currentIndex: current });
+  $("studyLevel").textContent=desc.deckLabel;
+  $("cardIndex").textContent=desc.currentNumber; $("cardTotal").textContent=desc.total;
+  $("progressBar").style.width=desc.progressPct+"%";
   $("levelBadge").textContent=c.level; $("word").textContent=c.word; $("pinyin").textContent=c.pinyin;
   $("meaning").textContent=c.meaning; $("example").textContent=c.example; $("examplePinyin").textContent=c.examplePinyin; $("translation").textContent=c.translation;
   // Front vocab pinyin (column C) shows on the front by default; when disabled it moves to the back.
@@ -502,8 +518,9 @@ window.HSK_APP = {
   // (used by "Ôn các từ này" / "Học các từ đã lưu"). Reuses the existing renderer, audio,
   // grading and SRS exactly.
   startSession(ids){
-    // Read-only selection (Phase 5): resolve ids in requested order, dedup, skip missing.
-    const list=sessionQuery.selectExplicitCardSession(ids);
+    // Read-only construction via StudySessionEngine (Phase 16; delegates to Phase 5:
+    // resolve ids in requested order, dedup, skip missing).
+    const list=studyEngine.buildExplicitSession({ cardIds: ids }).cards;
     if(!list.length) return false;
     session=list; current=0; sessionGrades=[]; snapshots={};
     // Deactivate any non-core view (Weak Words / Bookmarks / etc.) before entering
