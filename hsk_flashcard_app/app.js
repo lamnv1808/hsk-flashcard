@@ -1,9 +1,10 @@
 
 const cards = window.HSK_CARDS || [];
 const cardRepo = window.HSKUtil.cards;   // read-only CardRepository over the same source (built once)
-// All HSK levels present in the data, ordered by numeric suffix.
-// Auto-detected from the cards, so adding HSK5/HSK6 (or later HSK7…) needs no code change.
-const LEVELS = window.HSKUtil.levels.levelsFromCards(cards);
+// Deck identity/order comes from the active ContentPack (Phase 11); the pack derives
+// its decks from the cards once at construction, so this is exactly equivalent to the
+// previous levelsFromCards(cards) — HSK1..HSK6 (and future HSK7…) with no code change.
+const LEVELS = window.HSKUtil.contentPack.getDeckIds();
 // Storage keys: namespaced per logged-in account when cloud accounts are active,
 // otherwise the original global keys (unchanged local-only behavior).
 const AUTH = window.HSK_AUTH || {};

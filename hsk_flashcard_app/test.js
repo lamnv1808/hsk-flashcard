@@ -16,7 +16,7 @@
   var TYPE_DEFS = TMQ.getTypeDefs();          // type model (id/label/q/a), for the picker + labels
   function typeDef(id) { return TMQ.typeDef(id); }
 
-  var LEVELS = window.HSKUtil.cards.getLevels();
+  var LEVELS = window.HSKUtil.contentPack.getDeckIds();   // deck identity/order from the active pack (Phase 11)
 
   // -------- setup state (independent of Study Mode) --------
   var setup = { levels: [LEVELS[0] || "HSK1"], count: "20", types: [1, 2, 3, 4, 5, 6], mix: false };

@@ -26,8 +26,9 @@
 
   // Six question types (exact ids/labels/fields from test.js). q = prompt field;
   // a = answer field(s). These are Test Mode's type model (product config), not
-  // generic orchestration.
-  var TYPE_DEFS = [
+  // generic orchestration. Kept here as the DEFAULT; a pack may inject its own
+  // (byte-identical) defs via deps.typeDefs (Phase 11 — the active HSK pack owns them).
+  var DEFAULT_TYPE_DEFS = [
     { id: 1, label: "Hán tự → Pinyin",         q: "word",   a: ["pinyin"] },
     { id: 2, label: "Pinyin → Hán tự",         q: "pinyin", a: ["word"] },
     { id: 3, label: "Hán tự → Nghĩa",          q: "word",   a: ["meaning"] },
@@ -42,6 +43,8 @@
     deps = deps || {};
     var repo = deps.cardRepository;
     var rnd = (typeof deps.randomProvider === "function") ? deps.randomProvider : Math.random;
+    // Type definitions: injected (from the active content pack) or the built-in default.
+    var TYPE_DEFS = (Array.isArray(deps.typeDefs) && deps.typeDefs.length) ? deps.typeDefs : DEFAULT_TYPE_DEFS;
 
     function typeDef(id) { for (var i = 0; i < TYPE_DEFS.length; i++) if (TYPE_DEFS[i].id === id) return TYPE_DEFS[i]; return null; }
     function getTypeDefs() { return TYPE_DEFS.map(function (t) { return { id: t.id, label: t.label, q: t.q, a: t.a.slice() }; }); }
@@ -145,6 +148,11 @@
 
   NS.createTestModeQuery = createTestModeQuery;
   // Shared instance over the production CardRepository (Math.random in production).
-  NS.testMode = createTestModeQuery({ cardRepository: NS.cards });
+  // Test Mode type definitions are sourced from the active content pack (Phase 11);
+  // they are byte-identical to DEFAULT_TYPE_DEFS, so behavior is unchanged.
+  NS.testMode = createTestModeQuery({
+    cardRepository: NS.cards,
+    typeDefs: (NS.contentPack && NS.contentPack.getTestModes()) || null
+  });
 
 })(window.HSKUtil = window.HSKUtil || {});

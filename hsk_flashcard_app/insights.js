@@ -6,11 +6,10 @@
 (function () {
   "use strict";
   var $ = function (id) { return document.getElementById(id); };
-  var CARDS = window.HSK_CARDS || [];
   var repo = window.HSKUtil.cards;   // shared read-only CardRepository (built once)
   var ANALYTICS = window.HSKUtil.analytics;   // shared read-only AnalyticsQuery (Phase 6)
   var MQ = window.HSKUtil.userMetadata;   // shared read-only UserMetadataQuery (Phase 7)
-  var LEVELS = window.HSKUtil.levels.levelsFromCards(CARDS);
+  var LEVELS = window.HSKUtil.contentPack.getDeckIds();   // deck identity/order from the active pack (Phase 11)
   function trim(x) { return String(x == null ? "" : x).trim(); }
   function setActive(id) { document.querySelectorAll(".view").forEach(function (v) { v.classList.toggle("active", v.id === id); }); }
   function goHome() { if (window.stopSpeech) window.stopSpeech(); document.body.classList.remove("testing"); setActive("homeView"); if (window.renderHome) window.renderHome(); }

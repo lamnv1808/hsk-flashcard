@@ -132,12 +132,58 @@ def main():
         # ---- TEST MODE MAPPING equivalence (pack testModes == TestModeQuery defs) ----
         tm = pg.evaluate("""()=>{
           const packModes=HSKUtil.contentPack.getTestModes();
-          const queryDefs=HSKUtil.testMode.getTypeDefs();
+          const queryDefs=HSKUtil.testMode.getTypeDefs();     // shared instance now sourced from the pack
           return { equal: JSON.stringify(packModes)===JSON.stringify(queryDefs),
                    six: packModes.length===6 };
         }""")
         check("testmode pack defs == query defs", tm["equal"])
         check("testmode 6 modes", tm["six"])
+
+        # ---- LEVEL-DISCOVERY EQUIVALENCE: levelsFromCards vs pack.getDeckIds ----
+        ld = pg.evaluate("""()=>{
+          const mkPack=HSKUtil.createContentPack, LV=HSKUtil.levels;
+          // production HSK pack == raw derivation
+          const hskEqual=JSON.stringify(HSKUtil.contentPack.getDeckIds())===JSON.stringify(LV.levelsFromCards(window.HSK_CARDS));
+          // synthetic packs: deckProvider derives from cards, must equal levelsFromCards
+          function packIds(cards){
+            return mkPack({ id:'p', getCards:()=>cards, fieldRoles:{stableId:'id',deck:'level',primaryPrompt:'w'},
+              deckProvider:function(cs){ return LV.levelsFromCards(cs).map(function(id,i){ return {id:id,order:i+1,title:id,cardCount:0}; }); } }).getDeckIds();
+          }
+          const one=[{id:1,level:'A1',w:'x'}];
+          const three=[{id:1,level:'B2',w:'x'},{id:2,level:'B1',w:'y'},{id:3,level:'B3',w:'z'}];   // non-HSK, unusual order
+          const empty=[];
+          return {
+            hskEqual,
+            oneEqual: JSON.stringify(packIds(one))===JSON.stringify(LV.levelsFromCards(one)),
+            threeEqual: JSON.stringify(packIds(three))===JSON.stringify(LV.levelsFromCards(three)),
+            emptyEqual: JSON.stringify(packIds(empty))===JSON.stringify(LV.levelsFromCards(empty)),
+            deckIdsStable: JSON.stringify(HSKUtil.contentPack.getDeckIds())===JSON.stringify(HSKUtil.contentPack.getDeckIds()),
+            deckIdsCopy: (()=>{const a=HSKUtil.contentPack.getDeckIds(); a.push('X'); return HSKUtil.contentPack.getDeckIds().length===6;})()
+          };
+        }""")
+        for k in ["hskEqual", "oneEqual", "threeEqual", "emptyEqual", "deckIdsStable", "deckIdsCopy"]:
+            check("levelDiscovery:" + k, ld[k])
+
+        # ---- DECK COUNTS: pack-declared == CardRepository actual ----
+        dc = pg.evaluate("""()=>{
+          const declared={}; HSKUtil.contentPack.getDecks().forEach(d=>declared[d.id]=d.cardCount);
+          const actual=HSKUtil.cards.countByLevel();
+          return { equal: JSON.stringify(declared)===JSON.stringify(actual) };
+        }""")
+        check("deck declared counts == repo actual counts", dc["equal"])
+
+        # ---- WIRED TESTMODE: pack-sourced defs produce identical sessions to default defs ----
+        wt = pg.evaluate("""()=>{
+          const lcg=function(seed){ var s=seed>>>0; return function(){ s=(s*1664525+1013904223)>>>0; return s/4294967296; }; };
+          const cfg={levels:['HSK1'],count:"15",types:[1,2,3,4,5,6],mix:false};
+          const ser=qs=>qs.map(q=>({c:q.card.id,t:q.type,ci:q.correctIndex,o:q.options.map(o=>[o.card.id,o.isCorrect,o.lines])}));
+          const packWired=HSKUtil.createTestModeQuery({cardRepository:HSKUtil.cards, typeDefs:HSKUtil.contentPack.getTestModes(), randomProvider:lcg(21)});
+          const defaultDefs=HSKUtil.createTestModeQuery({cardRepository:HSKUtil.cards, randomProvider:lcg(21)});
+          const a=ser(packWired.createSession(cfg)), b=ser(defaultDefs.createSession(cfg));
+          return { identical: JSON.stringify(a)===JSON.stringify(b), nonEmpty:a.length===15 };
+        }""")
+        check("wired testmode == default testmode session", wt["identical"])
+        check("wired testmode session non-empty", wt["nonEmpty"])
 
         # ---- NO SIDE EFFECTS ----
         se = pg.evaluate("""()=>{
