@@ -16,6 +16,16 @@ let settings = JSON.parse(localStorage.getItem(settingsKey) || "{}");
 // pull and is usable during the first renderHome() (before HSK_APP exists).
 // It never writes/marks-dirty; the existing write path (saveSettings) is unchanged.
 const settingsRepo = window.HSKUtil.createSettingsRepository(() => settings);
+// Read-only Study session card-SELECTION seam (Phase 5). Owns no session state:
+// it only reads cards/progress/date/random and returns the card list to seed a
+// session. Progress is read through a live provider so cloud-pull reassignment and
+// account switches are observed (no stale progress). today() is hoisted below.
+const sessionQuery = window.HSKUtil.createStudySessionQuery({
+  cardRepository: cardRepo,
+  progressProvider: () => progress,
+  dateProvider: () => today(),
+  randomProvider: Math.random
+});
 let session = [], current = 0, selectedLevels = settings.selectedLevels || ["HSK1"], flipped = false, sessionGrades = [];
 let snapshots = {};   // in-memory per-session-index undo history for SRS (never persisted)
 
@@ -186,16 +196,9 @@ function startStudy(levels){
   const sizeSetting=$("sessionSize").value;
   settings.sessionSize=sizeSetting; settings.selectedLevels=levels; saveSettings();
 
-  const due=dueCards(levels);
-  const fresh=cards.filter(c=>levels.includes(c.level) && getCardState(c.id).reps===0);
-  const merged=[...due, ...fresh.filter(c=>!due.some(d=>d.id===c.id))];
-  const limit=sizeSetting==="all"?merged.length:Number(sizeSetting);
-  session=merged.slice(0,limit);
-
-  if(!session.length){
-    const fallback=cards.filter(c=>levels.includes(c.level)).sort(()=>Math.random()-.5);
-    session=fallback.slice(0, sizeSetting==="all"?fallback.length:Number(sizeSetting));
-  }
+  // Read-only selection (Phase 5): due -> fresh(not-in-due) -> random fallback if empty.
+  // app.js still owns the mutable session state, streak write, view + first render.
+  session=sessionQuery.selectStandardSession({ levels, limit: sizeSetting==="all"?"all":Number(sizeSetting) });
 
   current=0; sessionGrades=[]; snapshots={}; updateStreak(); showView("studyView"); renderCard();
 }
@@ -459,8 +462,8 @@ window.HSK_APP = {
   // (used by "Ôn các từ này" / "Học các từ đã lưu"). Reuses the existing renderer, audio,
   // grading and SRS exactly.
   startSession(ids){
-    const list=[]; const seen=new Set();
-    (ids||[]).forEach(id=>{ const c=cardRepo.getById(id); if(c && !seen.has(c.id)){ seen.add(c.id); list.push(c); } });
+    // Read-only selection (Phase 5): resolve ids in requested order, dedup, skip missing.
+    const list=sessionQuery.selectExplicitCardSession(ids);
     if(!list.length) return false;
     session=list; current=0; sessionGrades=[]; snapshots={};
     // Deactivate any non-core view (Weak Words / Bookmarks / etc.) before entering
