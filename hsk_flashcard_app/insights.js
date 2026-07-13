@@ -6,54 +6,17 @@
 (function () {
   "use strict";
   var $ = function (id) { return document.getElementById(id); };
-  var CARDS = window.HSK_CARDS || [];
-  var BY = new Map(CARDS.map(function (c) { return [c.id, c]; }));
-  var LEVELS = (function () {
-    var s = {}; CARDS.forEach(function (c) { s[c.level] = 1; });
-    return Object.keys(s).sort(function (a, b) { return (parseInt(String(a).replace(/\D/g, ""), 10) || 0) - (parseInt(String(b).replace(/\D/g, ""), 10) || 0); });
-  })();
-  function P() { return (window.HSK_APP && window.HSK_APP.getProgress()) || {}; }
+  var repo = window.HSKUtil.cards;   // shared read-only CardRepository (built once)
+  var ANALYTICS = window.HSKUtil.analytics;   // shared read-only AnalyticsQuery (Phase 6)
+  var MQ = window.HSKUtil.userMetadata;   // shared read-only UserMetadataQuery (Phase 7)
+  var LEVELS = window.HSKUtil.contentPack.getDeckIds();   // deck identity/order from the active pack (Phase 11)
   function trim(x) { return String(x == null ? "" : x).trim(); }
   function setActive(id) { document.querySelectorAll(".view").forEach(function (v) { v.classList.toggle("active", v.id === id); }); }
   function goHome() { if (window.stopSpeech) window.stopSpeech(); document.body.classList.remove("testing"); setActive("homeView"); if (window.renderHome) window.renderHome(); }
 
-  /* ---------------- weakness model ----------------
-     Signals come only from the existing progress record {due,interval,reps,correct,attempts}.
-     failures = attempts - correct (Again/Khó don't add to correct).
-     lastGraded ≈ due - interval days.
-     weakness = failures * smoothedFailRate * recencyWeight
-       smoothedFailRate = (failures+1)/(attempts+2)   // evidence-aware, low-data can't dominate
-       recencyWeight    = 1/(1 + daysSince/14)         // recent failures weigh more
-     Untouched (attempts 0) => excluded. Touched-but-never-failed => weakness 0 (not weak). */
-  function lastGradedDate(st) {
-    if (!st.due) return null;
-    var due = new Date(st.due + "T00:00:00");
-    if (isNaN(due)) return null;
-    return new Date(due.getTime() - (st.interval || 0) * 86400000);
-  }
-  function daysSince(d) { if (!d) return 30; return Math.max(0, Math.round((Date.now() - d.getTime()) / 86400000)); }
-  function weakness(st) {
-    var attempts = st.attempts || 0;
-    if (attempts <= 0) return null;
-    var failures = attempts - (st.correct || 0);
-    if (failures <= 0) return 0;
-    var sfr = (failures + 1) / (attempts + 2);
-    var rec = 1 / (1 + daysSince(lastGradedDate(st)) / 14);
-    return failures * sfr * rec;
-  }
-
-  function weakCards(levelFilter) {
-    var prog = P(), out = [];
-    Object.keys(prog).forEach(function (id) {
-      var card = BY.get(Number(id)); if (!card) return;
-      if (levelFilter && levelFilter !== "all" && card.level !== levelFilter) return;
-      var st = prog[id], w = weakness(st);
-      if (w == null || w <= 0) return;
-      out.push({ card: card, st: st, score: w, failures: (st.attempts || 0) - (st.correct || 0), attempts: st.attempts || 0, last: lastGradedDate(st) });
-    });
-    out.sort(function (a, b) { return b.score - a.score || b.failures - a.failures; });
-    return out;
-  }
+  // Weakness model, level retention, daily aggregates and the daily series now live
+  // in core/analytics/analytics-query.js (Phase 6). insights.js consumes the read
+  // models via ANALYTICS and keeps all DOM/SVG rendering below.
 
   /* ---------------- shared bits ---------------- */
   function populateLevelSelect(sel, allLabel) {
@@ -62,7 +25,7 @@
     var o = document.createElement("option"); o.value = "all"; o.textContent = allLabel; sel.appendChild(o);
     LEVELS.forEach(function (lv) { var op = document.createElement("option"); op.value = lv; op.textContent = lv; sel.appendChild(op); });
   }
-  function fmtDate(d) { if (!d) return ""; return d.toISOString().slice(0, 10); }
+  function fmtDate(d) { return d ? window.HSKUtil.date.isoDay(d) : ""; }   // UTC day; falsy -> "" (unchanged)
   function wordRow(card, opts) {
     opts = opts || {};
     var row = document.createElement("div"); row.className = "word-row";
@@ -89,7 +52,7 @@
   var weakShown = [];
   function renderWeak() {
     var level = $("weakLevel").value, topN = parseInt($("weakTop").value, 10) || 20;
-    var all = weakCards(level);
+    var all = ANALYTICS.getWeakWords(level);
     weakShown = all.slice(0, topN);
     var box = $("weakList"); box.innerHTML = "";
     if (!weakShown.length) {
@@ -109,42 +72,22 @@
 
   /* ---------------- Smart Review insights ---------------- */
   function renderInsights() {
-    var prog = P(), box = $("insightsBody"); box.innerHTML = "";
-    var touched = Object.keys(prog);
-    if (!touched.length) { box.innerHTML = '<p class="muted empty-state">Chưa đủ dữ liệu để phân tích.</p>'; return; }
+    var m = ANALYTICS.getSmartReviewModel(), box = $("insightsBody"); box.innerHTML = "";
+    if (!m.hasData) { box.innerHTML = '<p class="muted empty-state">Chưa đủ dữ liệu để phân tích.</p>'; return; }
 
-    // level retention
-    var byLvl = {};
-    touched.forEach(function (id) {
-      var card = BY.get(Number(id)); if (!card) return;
-      var st = prog[id]; var a = st.attempts || 0; if (!a) return;
-      var l = byLvl[card.level] || (byLvl[card.level] = { att: 0, cor: 0 });
-      l.att += a; l.cor += (st.correct || 0);
-    });
-    var lvlStats = Object.keys(byLvl).filter(function (l) { return byLvl[l].att >= 10; })
-      .map(function (l) { return { level: l, ret: byLvl[l].cor / byLvl[l].att }; });
     var rows = [];
-    if (lvlStats.length) {
-      lvlStats.sort(function (a, b) { return a.ret - b.ret; });
-      rows.push(["Cấp độ nhớ kém nhất", lvlStats[0].level + " (" + Math.round(lvlStats[0].ret * 100) + "%)"]);
-      var top = lvlStats[lvlStats.length - 1];
-      rows.push(["Cấp độ nhớ tốt nhất", top.level + " (" + Math.round(top.ret * 100) + "%)"]);
+    if (m.levelRetention) {
+      rows.push(["Cấp độ nhớ kém nhất", m.levelRetention.weakest.level + " (" + m.levelRetention.weakest.pct + "%)"]);
+      rows.push(["Cấp độ nhớ tốt nhất", m.levelRetention.strongest.level + " (" + m.levelRetention.strongest.pct + "%)"]);
     } else {
       rows.push(["Nhớ theo cấp độ", "Chưa đủ dữ liệu để phân tích."]);
     }
-
-    var weak = weakCards("all");
-    rows.push(["Tổng số từ cần cải thiện", String(weak.length)]);
-    var recent = weak.filter(function (x) { return x.last && daysSince(x.last) <= 7; }).length;
-    rows.push(["Từ vừa gặp khó (7 ngày)", String(recent)]);
-
-    // daily aggregates
-    var dc = (window.HSKMeta && HSKMeta.dailyCounts()) || {};
-    rows.push(["Đã học hôm nay", String(dc[HSKMeta.localDay()] || 0)]);
-    rows.push(["Đã học 7 ngày qua", String(sumDays(dc, 7))]);
-    rows.push(["Đã học 30 ngày qua", String(sumDays(dc, 30))]);
-    var streak = (window.HSK_APP && HSK_APP.getSettings().streak) || 0;
-    rows.push(["Chuỗi ngày hiện tại", String(streak)]);
+    rows.push(["Tổng số từ cần cải thiện", String(m.weakCount)]);
+    rows.push(["Từ vừa gặp khó (7 ngày)", String(m.recentStruggles)]);
+    rows.push(["Đã học hôm nay", String(m.today)]);
+    rows.push(["Đã học 7 ngày qua", String(m.last7)]);
+    rows.push(["Đã học 30 ngày qua", String(m.last30)]);
+    rows.push(["Chuỗi ngày hiện tại", String(m.streak)]);
 
     rows.forEach(function (r) {
       var d = document.createElement("div"); d.className = "insight-row";
@@ -153,20 +96,13 @@
       d.appendChild(k); d.appendChild(v); box.appendChild(d);
     });
   }
-  function sumDays(dc, n) {
-    var t = 0, now = new Date();
-    for (var i = 0; i < n; i++) { var d = new Date(now.getTime() - i * 86400000); t += dc[HSKMeta.localDay(d)] || 0; }
-    return t;
-  }
 
   /* ---------------- daily chart (inline SVG) ---------------- */
   var chartDays = 7;
   function renderChart() {
-    var dc = (window.HSKMeta && HSKMeta.dailyCounts()) || {};
-    var now = new Date(), labels = [], vals = [];
-    for (var i = chartDays - 1; i >= 0; i--) { var d = new Date(now.getTime() - i * 86400000); labels.push(d); vals.push(dc[HSKMeta.localDay(d)] || 0); }
-    var total = vals.reduce(function (a, b) { return a + b; }, 0);
-    var max = Math.max(1, Math.max.apply(null, vals));
+    // Read-only series from AnalyticsQuery (Phase 6); SVG building stays here.
+    var series = ANALYTICS.getDailySeries(chartDays);
+    var labels = series.labels, vals = series.values, total = series.total, max = series.max;
     var W = chartDays * 16, H = 120, pad = 4, bw = 16 - 6;
     var svg = '<svg viewBox="0 0 ' + W + ' ' + (H + 16) + '" preserveAspectRatio="none" width="100%" height="150" xmlns="http://www.w3.org/2000/svg">';
     vals.forEach(function (v, i) {
@@ -180,7 +116,7 @@
     svg += '<text x="' + (W - 1) + '" y="' + (H + 12) + '" font-size="8" text-anchor="end" style="fill:var(--muted)">' + fmtDate(labels[labels.length - 1]).slice(5) + '</text>';
     svg += "</svg>";
     $("dailyChart").innerHTML = svg;
-    var avg = (total / chartDays).toFixed(1);
+    var avg = series.average.toFixed(1);
     $("dailyChartSummary").textContent = total === 0
       ? "Chưa có dữ liệu học trong " + chartDays + " ngày gần đây."
       : "Tổng " + total + " từ trong " + chartDays + " ngày · trung bình " + avg + " từ/ngày.";
@@ -190,10 +126,9 @@
   function showInsights() { setActive("insightsView"); $("insightsView").scrollTop = 0; renderInsights(); renderChart(); }
 
   /* ---------------- Bookmarks page ---------------- */
-  function bookmarkCards() {
-    var ids = (window.HSKMeta && HSKMeta.bookmarks()) || [];
-    return ids.map(function (id) { return BY.get(Number(id)); }).filter(Boolean);
-  }
+  // Bookmark-card resolution now via the read-only UserMetadataQuery (Phase 7):
+  // requested (insertion) order, numeric ids, skips missing — unchanged.
+  function bookmarkCards() { return MQ.getBookmarkedCards(); }
   function renderBookmarks() {
     var level = $("bmLevel").value, q = trim($("bmSearch").value).toLowerCase();
     var list = bookmarkCards().filter(function (c) {
@@ -237,7 +172,7 @@
   var bl = $("bmLevel"); if (bl) bl.onchange = renderBookmarks;
   var bs = $("bmSearch"); if (bs) bs.oninput = renderBookmarks;
   on("bmStudyBtn", function () {
-    var ids = bookmarkCards().filter(function (c) { return $("bmLevel").value === "all" || c.level === $("bmLevel").value; }).map(function (c) { return c.id; });
+    var ids = MQ.getBookmarkedCards({ level: $("bmLevel").value }).map(function (c) { return c.id; });
     studyIds(ids);
   });
 

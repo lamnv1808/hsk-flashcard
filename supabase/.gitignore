@@ -1,0 +1,9 @@
+# Supabase CLI machine-local state — do NOT commit (matches `supabase init` defaults).
+# These are regenerated locally by `supabase link` / CLI commands; committing them
+# leaks machine-specific project cache and causes noisy diffs. No secrets are stored
+# here, but they are not source of truth.
+.branches
+.temp
+
+# Local Supabase env (secrets live in Edge Function secrets, never in the repo)
+.env

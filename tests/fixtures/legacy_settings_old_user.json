@@ -1,0 +1,11 @@
+{
+  "selectedLevels": ["HSK1", "HSK2"],
+  "sessionSize": "20",
+  "speechRate": 1,
+  "autoReadWord": false,
+  "autoReadExample": true,
+  "showFrontPinyin": true,
+  "dark": true,
+  "streak": 5,
+  "lastStudy": "2026-07-10"
+}
