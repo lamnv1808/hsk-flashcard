@@ -25,13 +25,13 @@ const settingsRepo = window.HSKUtil.createSettingsRepository(() => settings);
 // getCardState) is unchanged and does NOT go through this repository.
 const progressRepo = window.HSKUtil.createProgressRepository({ progressProvider: () => progress });
 // Write-capable grading boundary (Phase 12). Owns the per-card grade transaction only:
-// read current state (via progressRepo) -> existing SRS (srsNextState) -> assign the live
-// progress row -> save() -> HSKSync.markDirty(). Writes to the live `progress` binding, so
-// cloud-pull reassignment / account switch are honored. srsNextState/save are hoisted.
+// read current state (via progressRepo) -> pure SRS math (HSKUtil.srsScheduler.computeNext,
+// Phase 18) -> assign the live progress row -> save() -> HSKSync.markDirty(). Writes to the
+// live `progress` binding, so cloud-pull reassignment / account switch are honored.
 const progressWriter = window.HSKUtil.createProgressWriter({
   progressProvider: () => progress,
   progressRepository: progressRepo,
-  srsCalculator: srsNextState,
+  srsCalculator: window.HSKUtil.srsScheduler.computeNext,   // pure SRS math (Phase 18)
   save: save,
   markDirty: (id) => { if(window.HSKSync) HSKSync.markDirty(id); },
   dateProvider: () => new Date(),
@@ -328,34 +328,8 @@ function revertSnapshot(index){
   else delete progress[snap.id];
 }
 
-// Exact current SRS math (unchanged): mutates `s` in place and returns it. Kept here as
-// the source of truth; injected into ProgressWriter (Phase 12) so the write transaction
-// is owned by the writer while the formula stays in app.js.
-function srsNextState(s, grade, now){
-  let days;
-  if(grade==="again"){
-    days=0;
-    now.setMinutes(now.getMinutes()+1);
-    s.interval=0;
-  } else if(grade==="hard"){
-    days=Math.max(1, s.interval ? Math.round(s.interval*1.2) : 1);
-    now.setDate(now.getDate()+days);
-    s.interval=days;
-  } else if(grade==="good"){
-    days=Math.max(3, s.interval ? Math.round(s.interval*2.0) : 3);
-    now.setDate(now.getDate()+days);
-    s.interval=days;
-  } else {
-    days=Math.max(7, s.interval ? Math.round(s.interval*3.0) : 7);
-    now.setDate(now.getDate()+days);
-    s.interval=days;
-  }
-  s.due=now.toISOString().slice(0,10);
-  s.reps=(s.reps||0)+1;
-  s.attempts=(s.attempts||0)+1;
-  if(grade==="good"||grade==="easy") s.correct=(s.correct||0)+1;
-  return s;
-}
+// SRS next-state math now lives in core/srs/scheduler.js (Phase 18) and is injected into
+// ProgressWriter as srsCalculator above. app.js no longer owns any SRS formula.
 
 function gradeCard(grade){
   if(!flipped) return;             // guard: only grade a flipped card -> blocks double-grade / rapid repeats

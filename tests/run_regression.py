@@ -64,6 +64,7 @@ GROUPS = {
         "tests/data/test_contracts.py",
     ],
     "SRS & Study Mode": [
+        "tests/browser/test_srs_scheduler.py",
         "tests/browser/test_srs_characterization.py",
         "tests/regression/p0_test.py",
         "tests/regression/regression.py",
