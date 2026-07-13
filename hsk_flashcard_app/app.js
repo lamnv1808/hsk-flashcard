@@ -26,6 +26,16 @@ const sessionQuery = window.HSKUtil.createStudySessionQuery({
   dateProvider: () => today(),
   randomProvider: Math.random
 });
+// Read-only analytics/dashboard read-model seam (Phase 6). Own instance over the
+// live `progress` binding so it works during the first renderHome() (before HSK_APP)
+// and observes reloadState() reassignment. Returns data only; renderHome does the DOM.
+const analytics = window.HSKUtil.createAnalyticsQuery({
+  cardRepository: cardRepo,
+  progressProvider: () => progress,
+  settingsRepository: settingsRepo,
+  dailyCountsProvider: () => (window.HSKMeta && window.HSKMeta.dailyCounts()) || {},
+  dateProvider: () => new Date()
+});
 let session = [], current = 0, selectedLevels = settings.selectedLevels || ["HSK1"], flipped = false, sessionGrades = [];
 let snapshots = {};   // in-memory per-session-index undo history for SRS (never persisted)
 
@@ -166,22 +176,19 @@ function renderHome(){
   $("showFrontPinyin").checked=settingsRepo.getFrontPinyinEnabled();   // default on
   $("totalWords").textContent=cardRepo.count().toLocaleString("vi-VN");   // total vocab count, automatic
   const grid=$("deckGrid"); grid.innerHTML="";
-  LEVELS.forEach(level=>{
-    const all=levelCards(level), learned=all.filter(c=>getCardState(c.id).reps>0).length, due=dueCards([level]).length;
-    const pct=Math.round(learned/all.length*100);
+  // Read-only analytics (Phase 6): per-level {total,learned,due,pct}. DOM stays here.
+  analytics.getLevelSummary(LEVELS).forEach(({level,total,learned,due,pct})=>{
     const btn=document.createElement("button");
     btn.className="deck-card";
-    btn.innerHTML=`<div class="deck-level">${level}</div><div class="deck-count">${all.length} từ · ${due} cần ôn</div><div class="deck-progress"><span style="width:${pct}%"></span></div><div class="deck-meta"><span>Đã học ${learned}</span><span>${pct}%</span></div>`;
+    btn.innerHTML=`<div class="deck-level">${level}</div><div class="deck-count">${total} từ · ${due} cần ôn</div><div class="deck-progress"><span style="width:${pct}%"></span></div><div class="deck-meta"><span>Đã học ${learned}</span><span>${pct}%</span></div>`;
     btn.onclick=()=>{ selectedLevels=[level]; settings.selectedLevels=selectedLevels; saveSettings(); renderLevelPicker(); };
     grid.appendChild(btn);
   });
-  const learned=cards.filter(c=>getCardState(c.id).reps>0).length;
-  const attempts=Object.values(progress).reduce((s,x)=>s+(x.attempts||0),0);
-  const correct=Object.values(progress).reduce((s,x)=>s+(x.correct||0),0);
-  $("learnedStat").textContent=learned;
-  $("retentionStat").textContent=attempts?Math.round(correct/attempts*100)+"%":"0%";
+  const summary=analytics.getHomeSummary(LEVELS);
+  $("learnedStat").textContent=summary.learned;
+  $("retentionStat").textContent=summary.retentionText;
   $("streakStat").textContent=settingsRepo.getStreak();
-  $("dueCount").textContent=dueCards(LEVELS).length;
+  $("dueCount").textContent=summary.dueCount;
 }
 
 function updateStreak(){
