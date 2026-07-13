@@ -441,7 +441,14 @@ $("homeBtn").onclick=()=>{stopSpeech();showView("homeView");renderHome()};
 $("shuffleBtn").onclick=()=>{session.sort(()=>Math.random()-.5);sessionState=sessionSM.startSession({cardIds:session.map(c=>c.id)});snapshots={};renderCard()};
 
 // Click the Chinese word / example to hear it (without flipping the card, and not after a drag).
-$("word").addEventListener("click",e=>{e.stopPropagation(); if(suppressClick){suppressClick=false;return;} speakWord();});
+// Shared word-audio binding for the two places the vocab word can be shown (depending on
+// the front-pinyin setting): the FRONT word (#word) and the BACK word block (#backWordBlock
+// = hanzi + pinyin line, shown on the back only when front pinyin is off). Reuses speakWord
+// (reads the zh-CN word only — no pinyin/Vietnamese); stopPropagation so it reads instead of
+// flipping the card; suppressClick guards against reading after a drag / double playback.
+function bindWordAudio(el){ if(el) el.addEventListener("click",e=>{e.stopPropagation(); if(suppressClick){suppressClick=false;return;} speakWord();}); }
+bindWordAudio($("word"));            // front face — always shows the word
+bindWordAudio($("backWordBlock"));   // back face — shows word+pinyin when front pinyin is off
 $("example").addEventListener("click",e=>{e.stopPropagation(); if(suppressClick){suppressClick=false;return;} speakExample();});
 
 $("speakWordBtn").onclick=e=>{e.stopPropagation();speakWord()};
