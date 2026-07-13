@@ -41,6 +41,9 @@ GROUPS = {
     "ProgressRepository (Phase 8)": [
         "tests/browser/test_progress_repository.py",
     ],
+    "ProgressWriter (Phase 12)": [
+        "tests/browser/test_progress_writer.py",
+    ],
     "TestModeQuery (Phase 9)": [
         "tests/browser/test_test_mode_query.py",
     ],

@@ -22,6 +22,18 @@ const settingsRepo = window.HSKUtil.createSettingsRepository(() => settings);
 // so they no longer read the raw progress object. The write path (gradeCard/save/
 // getCardState) is unchanged and does NOT go through this repository.
 const progressRepo = window.HSKUtil.createProgressRepository({ progressProvider: () => progress });
+// Write-capable grading boundary (Phase 12). Owns the per-card grade transaction only:
+// read current state (via progressRepo) -> existing SRS (srsNextState) -> assign the live
+// progress row -> save() -> HSKSync.markDirty(). Writes to the live `progress` binding, so
+// cloud-pull reassignment / account switch are honored. srsNextState/save are hoisted.
+const progressWriter = window.HSKUtil.createProgressWriter({
+  progressProvider: () => progress,
+  progressRepository: progressRepo,
+  srsCalculator: srsNextState,
+  save: save,
+  markDirty: (id) => { if(window.HSKSync) HSKSync.markDirty(id); },
+  dateProvider: () => new Date()
+});
 // Read-only Study session card-SELECTION seam (Phase 5). Owns no session state:
 // it only reads cards/progress/date/random and returns the card list to seed a
 // session. Progress is read through the ProgressRepository so cloud-pull reassignment
@@ -289,12 +301,10 @@ function revertSnapshot(index){
   else delete progress[snap.id];
 }
 
-function gradeCard(grade){
-  if(!flipped) return;             // guard: only grade a flipped card -> blocks double-grade / rapid repeats
-  const c=session[current];
-  captureSnapshot(current,c.id);   // remember pre-grade state (once per position)
-  revertSnapshot(current);         // undo any earlier grade at this position before re-applying
-  const s=getCardState(c.id), now=new Date();
+// Exact current SRS math (unchanged): mutates `s` in place and returns it. Kept here as
+// the source of truth; injected into ProgressWriter (Phase 12) so the write transaction
+// is owned by the writer while the formula stays in app.js.
+function srsNextState(s, grade, now){
   let days;
   if(grade==="again"){
     days=0;
@@ -317,8 +327,17 @@ function gradeCard(grade){
   s.reps=(s.reps||0)+1;
   s.attempts=(s.attempts||0)+1;
   if(grade==="good"||grade==="easy") s.correct=(s.correct||0)+1;
-  progress[c.id]=s; save();
-  if(window.HSKSync) HSKSync.markDirty(c.id);   // queue only this card for cloud sync
+  return s;
+}
+
+function gradeCard(grade){
+  if(!flipped) return;             // guard: only grade a flipped card -> blocks double-grade / rapid repeats
+  const c=session[current];
+  captureSnapshot(current,c.id);   // remember pre-grade state (once per position)
+  revertSnapshot(current);         // undo any earlier grade at this position before re-applying
+  // Write transaction (read -> SRS -> assign progress[id] -> save -> markDirty) owned by
+  // ProgressWriter (Phase 12). Snapshot/undo, daily-learn, session state and UI stay here.
+  progressWriter.grade({ cardId: c.id, grade });
   if(window.HSKMeta) HSKMeta.recordDailyLearn(c.id);   // daily-learning chart (Study Mode grades only)
   sessionGrades[current]=grade;    // index-addressed: re-grading overwrites, never duplicates
   current++; renderCard();
