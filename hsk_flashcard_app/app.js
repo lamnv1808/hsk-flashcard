@@ -74,7 +74,13 @@ const studyEngine = window.HSKUtil.createStudySessionEngine({
   userMetadataQuery: window.HSKUtil.userMetadata,
   dateProvider: () => today()
 });
-let session = [], current = 0, selectedLevels = settings.selectedLevels || ["HSK1"], flipped = false, sessionGrades = [];
+let session = [], selectedLevels = settings.selectedLevels || ["HSK1"];
+// Authoritative mutable Study session state (Phase 20). The pure StudySessionStateMachine
+// owns cardIds/currentIndex/flipped/gradesByIndex/status + all navigation transitions;
+// app.js keeps `session` (resolved card objects, same order as cardIds) as the render
+// source and `snapshots` as opaque undo payloads.
+const sessionSM = window.HSKUtil.createStudySessionStateMachine();
+let sessionState = sessionSM.createInitialState();
 let snapshots = {};   // in-memory per-session-index undo history for SRS (never persisted)
 
 const $ = id => document.getElementById(id);
@@ -160,7 +166,7 @@ function speak(items){
   step();
 }
 
-function currentCard(){ return session[current]; }
+function currentCard(){ return session[sessionState.currentIndex]; }
 function speakWord(){ const c = currentCard(); if(c) speak([{ text: c.word, lang: "zh-CN", el: $("word") }]); }       // never reads pinyin
 function speakExample(){ const c = currentCard(); if(c) speak([{ text: c.example, lang: "zh-CN", el: $("example") }]); } // never reads pinyin
 // Read All: Chinese word -> 500ms pause -> Chinese example. No pinyin, no Vietnamese by default.
@@ -246,7 +252,8 @@ function startStudy(levels){
   // session state, streak write, view + first render.
   session=studyEngine.buildSession({ levels, sessionSize: sizeSetting }).cards;
 
-  current=0; sessionGrades=[]; snapshots={}; updateStreak(); showView("studyView"); renderCard();
+  sessionState=sessionSM.startSession({ cardIds: session.map(c=>c.id) });   // currentIndex 0, flipped false, no grades
+  snapshots={}; updateStreak(); showView("studyView"); renderCard();
 }
 
 // Vocab pinyin (column C): shown on the FRONT by default; when the setting is off it
@@ -259,8 +266,8 @@ function applyPinyinDisplay(){
 }
 
 function renderCard(){
-  if(current>=session.length) return finishSession();
-  const c=session[current];
+  if(sessionState.currentIndex>=session.length) return finishSession();
+  const c=session[sessionState.currentIndex];
   const fc=$("flashcard");
   // P0 answer-leak fix: reset the flip WITHOUT the un-flip animation, so the back
   // face never rotates through a viewer-facing angle while it already holds the
@@ -268,7 +275,9 @@ function renderCard(){
   // content on the front, force a reflow so it applies instantly, then re-enable the
   // transition for user-initiated flips.
   fc.classList.add("no-flip-anim");
-  flipped=false;
+  // sessionState.flipped is already false here (every path into renderCard goes through a
+  // flipped=false transition: start/grade/skip/prev/shuffle). The DOM reset below is the
+  // visual P0 answer-leak guard and is unchanged.
   fc.classList.remove("flipped");
   $("ratingArea").classList.add("hidden");
   $("nextBtn").classList.add("hidden");
@@ -276,7 +285,7 @@ function renderCard(){
   $("sheetBackdrop").classList.add("hidden");
   $("flipHint").textContent="Bấm vào thẻ để lật";
   // Read-only session description (Phase 16). app.js still formats the DOM below.
-  const desc=studyEngine.describeSession({ cards: session, currentIndex: current });
+  const desc=studyEngine.describeSession({ cards: session, currentIndex: sessionState.currentIndex });
   $("studyLevel").textContent=desc.deckLabel;
   $("cardIndex").textContent=desc.currentNumber; $("cardTotal").textContent=desc.total;
   $("progressBar").style.width=desc.progressPct+"%";
@@ -292,15 +301,17 @@ function renderCard(){
   if(window.HSKMeta) HSKMeta.syncCard();   // bookmark state + hide note zone (front)
   void fc.offsetWidth;                     // force reflow: front + new content painted with no animation
   fc.classList.remove("no-flip-anim");     // restore the flip animation for the next user flip
-  $("flashcard").setAttribute("aria-label",`Thẻ ${current+1}/${session.length}. Từ: ${m.front.primary}. Bấm hoặc nhấn Space để xem nghĩa.`);
-  $("srStatus").textContent=`Thẻ ${current+1} trên ${session.length}. ${m.deckId}: ${m.front.primary}.`;
+  $("flashcard").setAttribute("aria-label",`Thẻ ${sessionState.currentIndex+1}/${session.length}. Từ: ${m.front.primary}. Bấm hoặc nhấn Space để xem nghĩa.`);
+  $("srStatus").textContent=`Thẻ ${sessionState.currentIndex+1} trên ${session.length}. ${m.deckId}: ${m.front.primary}.`;
   stopSpeech();                       // always stop audio when the card changes
   if(m.autoReadWord) speakWord();
   $("flashcard").focus({preventScroll:true});   // keep keyboard focus without scroll jumps
 }
 
 function flipCard(){
-  flipped=!flipped; $("flashcard").classList.toggle("flipped",flipped);
+  sessionState=sessionSM.flip(sessionState);   // pure toggle; app.js applies the DOM/audio below
+  const flipped=sessionState.flipped;
+  $("flashcard").classList.toggle("flipped",flipped);
   $("ratingArea").classList.toggle("hidden",!flipped);
   $("nextBtn").classList.toggle("hidden",!flipped);
   $("flipHint").textContent=flipped?"Chọn mức độ nhớ, hoặc Next để bỏ qua chấm điểm.":"Bấm vào thẻ để lật";
@@ -332,39 +343,42 @@ function revertSnapshot(index){
 // ProgressWriter as srsCalculator above. app.js no longer owns any SRS formula.
 
 function gradeCard(grade){
-  if(!flipped) return;             // guard: only grade a flipped card -> blocks double-grade / rapid repeats
-  const c=session[current];
-  captureSnapshot(current,c.id);   // remember pre-grade state (once per position)
-  revertSnapshot(current);         // undo any earlier grade at this position before re-applying
-  // Write transaction (read -> SRS -> assign progress[id] -> save -> markDirty) owned by
-  // ProgressWriter (Phase 12). Snapshot/undo, daily-learn, session state and UI stay here.
+  if(!sessionState.flipped) return;   // guard: only grade a flipped card -> blocks double-grade / rapid repeats
+  const idx=sessionState.currentIndex;
+  const c=session[idx];
+  captureSnapshot(idx,c.id);          // remember pre-grade state (once per position)
+  revertSnapshot(idx);                // undo any earlier grade at this position before re-applying
+  // Write transaction FIRST (read -> SRS -> assign progress[id] -> save -> markDirty) owned by
+  // ProgressWriter (Phase 12); the session state only advances AFTER the write, so a write
+  // failure never leaves a partial advance. Snapshot/undo + daily-learn stay here.
   progressWriter.grade({ cardId: c.id, grade });
   if(window.HSKMeta) HSKMeta.recordDailyLearn(c.id);   // daily-learning chart (Study Mode grades only)
-  sessionGrades[current]=grade;    // index-addressed: re-grading overwrites, never duplicates
-  current++; renderCard();
+  sessionState=sessionSM.grade(sessionState, grade);   // record grade@idx + advance + flipped=false
+  renderCard();
 }
 
 function skipCard(){
-  const k="i"+current;
+  const idx=sessionState.currentIndex;
+  const k="i"+idx;
   if(k in snapshots){  // this position was graded before -> undo its SRS effect
     const snap=snapshots[k];
     delete snapshots[k];
-    // Restore/delete + save + markDirty owned by ProgressWriter (Phase 13). Snapshot map,
-    // session index, sessionGrades and navigation stay controller-owned below.
+    // Restore/delete + save + markDirty owned by ProgressWriter (Phase 13); snapshot map,
+    // session index and navigation stay controller-owned. No write from navigation itself.
     progressWriter.restore({ cardId: snap.id, hadState: snap.had, previousState: snap.state });
   }
-  sessionGrades[current]="skip";
-  current++;
+  sessionState=sessionSM.skip(sessionState);   // record "skip"@idx + advance + flipped=false
   renderCard();
 }
 
 // Swipe LEFT = Next/Skip (no grading). Swipe RIGHT = previous card (pure navigation).
 function swipeNext(){ skipCard(); }
-function swipePrev(){ if(current>0){ current--; renderCard(); } }
+function swipePrev(){ if(sessionState.currentIndex>0){ sessionState=sessionSM.prev(sessionState); renderCard(); } }
 
 function finishSession(){
   stopSpeech();
   $("progressBar").style.width="100%"; showView("completeView");
+  const sessionGrades=sessionState.gradesByIndex;
   const graded=sessionGrades.filter(x=>x!=="skip");
   const good=graded.filter(x=>x==="good"||x==="easy").length;
   const skipped=sessionGrades.filter(x=>x==="skip").length;
@@ -424,7 +438,7 @@ $("startMixedBtn").onclick=()=>startStudy(selectedLevels);
 $("sessionSize").onchange=()=>{settings.sessionSize=$("sessionSize").value;saveSettings();};
 $("backBtn").onclick=exitStudy;
 $("homeBtn").onclick=()=>{stopSpeech();showView("homeView");renderHome()};
-$("shuffleBtn").onclick=()=>{session.sort(()=>Math.random()-.5);current=0;snapshots={};sessionGrades=[];renderCard()};
+$("shuffleBtn").onclick=()=>{session.sort(()=>Math.random()-.5);sessionState=sessionSM.startSession({cardIds:session.map(c=>c.id)});snapshots={};renderCard()};
 
 // Click the Chinese word / example to hear it (without flipping the card, and not after a drag).
 $("word").addEventListener("click",e=>{e.stopPropagation(); if(suppressClick){suppressClick=false;return;} speakWord();});
@@ -444,12 +458,12 @@ document.addEventListener("keydown",e=>{
   if(k===" "||k==="Spacebar"){
     if(tag==="button") return;                 // let a focused button activate natively
     e.preventDefault(); flipCard();
-  } else if(k==="1"){ if(flipped){e.preventDefault();gradeCard("again");} }
-  else if(k==="2"){ if(flipped){e.preventDefault();gradeCard("hard");} }
-  else if(k==="3"){ if(flipped){e.preventDefault();gradeCard("good");} }
-  else if(k==="4"){ if(flipped){e.preventDefault();gradeCard("easy");} }
+  } else if(k==="1"){ if(sessionState.flipped){e.preventDefault();gradeCard("again");} }
+  else if(k==="2"){ if(sessionState.flipped){e.preventDefault();gradeCard("hard");} }
+  else if(k==="3"){ if(sessionState.flipped){e.preventDefault();gradeCard("good");} }
+  else if(k==="4"){ if(sessionState.flipped){e.preventDefault();gradeCard("easy");} }
   else if(k==="n"||k==="N"){ e.preventDefault(); skipCard(); }
-  else if(k==="s"||k==="S"){ e.preventDefault(); flipped?speakExample():speakWord(); }
+  else if(k==="s"||k==="S"){ e.preventDefault(); sessionState.flipped?speakExample():speakWord(); }
   else if(k==="Escape"){ e.preventDefault(); exitStudy(); }
 });
 
@@ -500,7 +514,7 @@ window.HSK_APP = {
     // resolve ids in requested order, dedup, skip missing).
     const list=studyEngine.buildExplicitSession({ cardIds: ids }).cards;
     if(!list.length) return false;
-    session=list; current=0; sessionGrades=[]; snapshots={};
+    session=list; sessionState=sessionSM.startSession({ cardIds: list.map(c=>c.id) }); snapshots={};
     // Deactivate any non-core view (Weak Words / Bookmarks / etc.) before entering
     // Study Mode, since showView() only manages home/study/complete.
     document.querySelectorAll(".view").forEach(v=>v.classList.remove("active"));

@@ -69,3 +69,9 @@ No service_role key, DB password, or `PIN_PEPPER` value is tracked. `supabase-co
 holds the **public** anon key (safe). `supabase/.temp/*` holds project ref + a
 password-less pooler URL + version strings — already on public `main`; **flagged R14**
 for a hygiene follow-up (not a Phase-0 change).
+
+---
+
+## Architecture v2 close-out (Phases 0–20)
+
+Highest release risks — SRS behavior drift, next-card answer leak, storage-key/payload changes, and account-isolation regressions — are all closed: SRS goldens frozen and green, `p0_test` answer-leak green through every card-changing transition, storage keys/cloud payloads byte-identical, and `auth_test` account isolation green. Residual accepted risk: production Render deploy is a manual step by the owner (not automated).

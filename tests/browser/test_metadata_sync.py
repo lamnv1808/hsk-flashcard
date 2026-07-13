@@ -43,7 +43,7 @@ def main():
         ctx = b.new_context(); setup(ctx, pushed); pg = ctx.new_page()
         pg.goto(URL); pg.wait_for_timeout(400)
         pg.fill("#auUser", "alice"); pg.fill("#auPin", "1111"); pg.click("#auSubmit"); pg.wait_for_selector("#profileBtn", timeout=8000)
-        pg.evaluate("()=>{ startStudy(['HSK1']); const c=session[current]; window.HSKMeta.toggleBookmark(c.id); var s=window.HSK_APP.getSettings(); s.notes={[c.id]:'note cua alice'}; window.saveSettings(); }")
+        pg.evaluate("()=>{ startStudy(['HSK1']); const c=session[sessionState.currentIndex]; window.HSKMeta.toggleBookmark(c.id); var s=window.HSK_APP.getSettings(); s.notes={[c.id]:'note cua alice'}; window.saveSettings(); }")
         pg.wait_for_timeout(1600)   # debounced settings push
         keyA = pg.evaluate("()=>window.HSK_AUTH.settingsKey")
         aData = pg.evaluate("(k)=>JSON.parse(localStorage.getItem(k)||'{}')", keyA)

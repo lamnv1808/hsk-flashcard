@@ -25,7 +25,7 @@ with sync_playwright() as p:
     check('weak-study only studyView', activeViews(pg)==['studyView'])
     # weak-study SRS updates normally: grade a card, progress changes
     p_before=pg.evaluate("()=>localStorage.getItem('hsk_flashcard_progress_v2')")
-    cid=pg.evaluate('()=>session[current].id')
+    cid=pg.evaluate('()=>session[sessionState.currentIndex].id')
     pg.evaluate('()=>flipCard()'); pg.evaluate("()=>gradeCard('good')"); pg.wait_for_timeout(60)
     check('weak-study grading updates SRS', pg.evaluate("()=>localStorage.getItem('hsk_flashcard_progress_v2')")!=p_before)
     # daily count incremented by custom-session grade
@@ -57,7 +57,7 @@ with sync_playwright() as p:
 
     # --- NOTE edge cases ---
     pg.evaluate("()=>{ startStudy(['HSK1']); }"); pg.wait_for_timeout(80)
-    a=pg.evaluate('()=>session[current].id')
+    a=pg.evaluate('()=>session[sessionState.currentIndex].id')
     # set a note on card A, flip to see it
     pg.evaluate('()=>flipCard()'); pg.wait_for_timeout(50)
     pg.evaluate("()=>document.getElementById('noteToggle').click()")
@@ -76,20 +76,20 @@ with sync_playwright() as p:
     pg.evaluate("()=>gradeCard('good')"); pg.wait_for_timeout(60)
     pg.evaluate('()=>flipCard()'); pg.wait_for_timeout(50)
     check('next card clean empty note', pg.eval_on_selector('#noteDisplay','e=>e.hidden') and pg.eval_on_selector('#noteEditor','e=>e.hidden'))
-    check('next card has no note text', pg.evaluate('(id)=>!window.HSKMeta.hasNote(id)', pg.evaluate('()=>session[current].id')))
+    check('next card has no note text', pg.evaluate('(id)=>!window.HSKMeta.hasNote(id)', pg.evaluate('()=>session[sessionState.currentIndex].id')))
     # note maxlength enforcement (>1000 truncated)
-    pg.evaluate("()=>{ const c=session[current]; var s=window.HSK_APP.getSettings(); s.notes=s.notes||{}; window.HSKMeta.toggleBookmark; }")
+    pg.evaluate("()=>{ const c=session[sessionState.currentIndex]; var s=window.HSK_APP.getSettings(); s.notes=s.notes||{}; window.HSKMeta.toggleBookmark; }")
     long='x'*1500
     pg.evaluate("()=>document.getElementById('noteToggle').click()")
     pg.evaluate("(v)=>{ const t=document.getElementById('noteInput'); t.value=v; t.dispatchEvent(new Event('input')); }", long)
     pg.evaluate("()=>document.getElementById('noteSave').click()"); pg.wait_for_timeout(50)
-    savedLen=pg.evaluate("()=>{ const id=session[current].id; return window.HSKMeta.getNote(id).length; }")
+    savedLen=pg.evaluate("()=>{ const id=session[sessionState.currentIndex].id; return window.HSKMeta.getNote(id).length; }")
     check('note truncated <=1000', savedLen<=1000)
 
     # --- bookmark reflects per-card when navigating ---
     pg.evaluate('()=>exitStudy()'); pg.wait_for_timeout(40)
     pg.evaluate("()=>{ var s=window.HSK_APP.getSettings(); s.bookmarks=[]; window.saveSettings(); progress={}; save(); startStudy(['HSK1']); }"); pg.wait_for_timeout(60)
-    id0=pg.evaluate('()=>session[current].id')
+    id0=pg.evaluate('()=>session[sessionState.currentIndex].id')
     pg.evaluate("()=>document.getElementById('bookmarkBtn').click()"); pg.wait_for_timeout(30)  # bookmark card 0
     star0=pg.eval_on_selector('#bookmarkBtn','e=>e.textContent')
     pg.evaluate('()=>flipCard()'); pg.evaluate("()=>gradeCard('good')"); pg.wait_for_timeout(60)  # next card

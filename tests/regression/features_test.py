@@ -29,7 +29,7 @@ with sync_playwright() as p:
 
     # ---------- BOOKMARK ----------
     pg.evaluate("()=>{ startStudy(['HSK1']); }"); pg.wait_for_timeout(120)
-    cid=pg.evaluate('()=>session[current].id')
+    cid=pg.evaluate('()=>session[sessionState.currentIndex].id')
     progBefore=pg.evaluate("()=>localStorage.getItem('hsk_flashcard_progress_v2')")
     pg.evaluate("()=>document.getElementById('bookmarkBtn').click()"); pg.wait_for_timeout(50)
     check('bookmark added', pg.evaluate("(id)=>window.HSKMeta.isBookmarked(id)", cid))

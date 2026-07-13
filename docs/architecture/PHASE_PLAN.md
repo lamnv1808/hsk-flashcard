@@ -110,3 +110,9 @@ commit(s) on `architecture-v2`; `main` untouched.
   to `architecture-v2` only when its gate is green. `main` receives an approved,
   separately-reviewed merge **outside** this plan's automation.
 - Never mix a data-shape change with a refactor in the same commit.
+
+---
+
+## Status — Architecture v2 COMPLETE (Phases 0–20)
+
+All 20 phases delivered on `architecture-v2`; full suite 28/28; production behavior byte-identical to `production-baseline-v1` (`ecd13fb`). Study session state is now owned by the pure `StudySessionStateMachine` (Phase 20). See [ARCHITECTURE_V2_RELEASE.md](ARCHITECTURE_V2_RELEASE.md). Render deploy remains manual.

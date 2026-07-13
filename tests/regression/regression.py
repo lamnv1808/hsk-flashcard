@@ -20,12 +20,12 @@ with sync_playwright() as p:
       window.SpeechSynthesisUtterance=function(t){window.__spoke.push(t);return new R(t);};
       speechSynthesis.speak=()=>{}; speechSynthesis.cancel=()=>{};
       progress={}; save();
-      startStudy(['HSK1']); session=session.slice(0,4); current=0; sessionGrades=[]; snapshots={}; renderCard();
+      startStudy(['HSK1']); session=session.slice(0,4); sessionState=sessionSM.startSession({cardIds:session.map(c=>c.id)}); snapshots={}; renderCard();
     }""")
     def key(k): pg.evaluate(f"() => document.dispatchEvent(new KeyboardEvent('keydown',{{key:{json.dumps(k)},bubbles:true,cancelable:true}}))")
 
     # Space flips
-    fl0=pg.evaluate("() => flipped"); key(" "); out["spaceFlips"]=(pg.evaluate("()=>flipped")!=fl0)
+    fl0=pg.evaluate("() => sessionState.flipped"); key(" "); out["spaceFlips"]=(pg.evaluate("()=>sessionState.flipped")!=fl0)
     # S on back reads example (zh)
     pg.evaluate("() => { window.__spoke=[]; }"); key("s")
     out["sReadsExampleOnBack"]=pg.evaluate("() => window.__spoke.slice()")
@@ -33,11 +33,11 @@ with sync_playwright() as p:
     ids=pg.evaluate("() => session.map(c=>c.id)")
     key("3")
     out["grade3_interval"]=pg.evaluate(f"() => (progress[{ids[0]}]||{{}}).interval")
-    out["advancedTo"]=pg.evaluate("() => current")
+    out["advancedTo"]=pg.evaluate("() => sessionState.currentIndex")
     # N skips
-    cur=pg.evaluate("() => current"); key("n"); out["nSkips"]=(pg.evaluate("()=>current")==cur+1)
+    cur=pg.evaluate("() => sessionState.currentIndex"); key("n"); out["nSkips"]=(pg.evaluate("()=>sessionState.currentIndex")==cur+1)
     # readAll: word then example, no pinyin/vietnamese
-    pg.evaluate("() => { current=0; renderCard(); window.__spoke=[]; readAll(); }")
+    pg.evaluate("() => { sessionState=sessionSM.startSession({cardIds:session.map(c=>c.id)}); renderCard(); window.__spoke=[]; readAll(); }")
     ra=pg.evaluate("() => window.__spoke.slice()")
     c0=pg.evaluate("() => ({w:session[0].word,e:session[0].example,py:session[0].pinyin,epy:session[0].examplePinyin,m:session[0].meaning,tr:session[0].translation})")
     out["readAll"]=ra
@@ -49,7 +49,7 @@ with sync_playwright() as p:
     out["darkOn"]=pg.evaluate("() => document.body.classList.contains('dark')")
     out["darkPersisted"]=pg.evaluate("() => JSON.parse(localStorage.getItem('hsk_flashcard_settings_v2')||'{}').dark===true")
     # autoRead word on new card
-    pg.evaluate("""() => { settings.autoReadWord=true; startStudy(['HSK1']); window.__spoke=[]; current=0; renderCard(); }""")
+    pg.evaluate("""() => { settings.autoReadWord=true; startStudy(['HSK1']); window.__spoke=[]; sessionState=sessionSM.startSession({cardIds:session.map(c=>c.id)}); renderCard(); }""")
     out["autoReadWord"]=pg.evaluate("() => window.__spoke.slice()")
     out["consoleErrors"]=errors
     out["pass"]=bool(errors==[] and out.get("spaceFlips") and out.get("grade3_interval")==3
