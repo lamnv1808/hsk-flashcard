@@ -1,5 +1,5 @@
 
-const CACHE='hsk-flashcards-v26';
+const CACHE='hsk-flashcards-v27';
 const ASSETS=[
   './','index.html','styles.css','app.js','data.js','manifest.webmanifest',
   'core/auth/auth-context-query.js','core/sessions/study-session-engine.js','core/srs/scheduler.js',

@@ -442,6 +442,9 @@ $("shuffleBtn").onclick=()=>{session.sort(()=>Math.random()-.5);sessionState=ses
 
 // Click the Chinese word / example to hear it (without flipping the card, and not after a drag).
 $("word").addEventListener("click",e=>{e.stopPropagation(); if(suppressClick){suppressClick=false;return;} speakWord();});
+// Back-side vocab word: tap/click reads the word (reuses speakWord). stopPropagation so it
+// reads instead of flipping the card; suppressClick guards against reading after a drag.
+$("backWord").addEventListener("click",e=>{e.stopPropagation(); if(suppressClick){suppressClick=false;return;} speakWord();});
 $("example").addEventListener("click",e=>{e.stopPropagation(); if(suppressClick){suppressClick=false;return;} speakExample();});
 
 $("speakWordBtn").onclick=e=>{e.stopPropagation();speakWord()};
