@@ -44,6 +44,9 @@ GROUPS = {
     "TestModeQuery (Phase 9)": [
         "tests/browser/test_test_mode_query.py",
     ],
+    "ContentPack (Phase 10)": [
+        "tests/browser/test_content_pack.py",
+    ],
     "Data & contracts": [
         "tests/data/test_card_stability.py",
         "tests/data/test_baseline_comparison.py",

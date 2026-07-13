@@ -55,6 +55,11 @@
   }
 
   NS.createCardRepository = createCardRepository;
-  // Shared repository over the production dataset — instantiated ONCE at load.
-  NS.cards = createCardRepository(window.HSK_CARDS || []);
+  // Shared repository over the active content pack's cards — instantiated ONCE at load.
+  // The HSK pack's getCards() returns the live window.HSK_CARDS array (same reference,
+  // no clone), so getAll()/getById/getByLevel/count/indexes are byte-identical to
+  // initializing directly from HSK_CARDS. Defensive fallback if the pack is absent.
+  NS.cards = createCardRepository(
+    (NS.contentPack && NS.contentPack.getCards()) || window.HSK_CARDS || []
+  );
 })();
