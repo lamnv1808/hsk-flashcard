@@ -6,10 +6,12 @@ const cardRepo = window.HSKUtil.cards;   // read-only CardRepository over the sa
 // previous levelsFromCards(cards) — HSK1..HSK6 (and future HSK7…) with no code change.
 const LEVELS = window.HSKUtil.contentPack.getDeckIds();
 // Storage keys: namespaced per logged-in account when cloud accounts are active,
-// otherwise the original global keys (unchanged local-only behavior).
-const AUTH = window.HSK_AUTH || {};
-const stateKey = AUTH.progressKey || "hsk_flashcard_progress_v2";
-const settingsKey = AUTH.settingsKey || "hsk_flashcard_settings_v2";
+// otherwise the original global keys (unchanged local-only behavior). Read through the
+// read-only AuthContextQuery (Phase 15) — exactly equivalent to the previous
+// `HSK_AUTH.progressKey || base` bootstrap selection.
+const authContext = window.HSKUtil.authContext;
+const stateKey = authContext.getProgressKey();
+const settingsKey = authContext.getSettingsKey();
 let progress = JSON.parse(localStorage.getItem(stateKey) || "{}");
 let settings = JSON.parse(localStorage.getItem(settingsKey) || "{}");
 // Read-only settings accessor (Phase 4). Bound to a provider over the LIVE

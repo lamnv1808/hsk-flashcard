@@ -44,6 +44,9 @@ GROUPS = {
     "ProgressWriter (Phase 12)": [
         "tests/browser/test_progress_writer.py",
     ],
+    "AuthContextQuery (Phase 15)": [
+        "tests/browser/test_auth_context_query.py",
+    ],
     "TestModeQuery (Phase 9)": [
         "tests/browser/test_test_mode_query.py",
     ],

@@ -1,7 +1,8 @@
 
-const CACHE='hsk-flashcards-v21';
+const CACHE='hsk-flashcards-v22';
 const ASSETS=[
   './','index.html','styles.css','app.js','data.js','manifest.webmanifest',
+  'core/auth/auth-context-query.js',
   'core/util/date.js','core/util/levels.js','core/util/shuffle.js','core/util/card-index.js',
   'core/content/content-pack.js','packs/hsk/hsk-content-pack.js',
   'core/cards/card-repository.js','core/settings/settings-repository.js',
