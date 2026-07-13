@@ -71,6 +71,7 @@ GROUPS = {
         "tests/browser/test_srs_characterization.py",
         "tests/regression/p0_test.py",
         "tests/regression/regression.py",
+        "tests/regression/completion_loop.py",
     ],
     "Features (Weak/Smart/Bookmarks/Notes)": [
         "tests/regression/features_test.py",
