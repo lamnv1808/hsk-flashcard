@@ -38,6 +38,9 @@ GROUPS = {
     "UserMetadataQuery (Phase 7)": [
         "tests/browser/test_user_metadata_query.py",
     ],
+    "ProgressRepository (Phase 8)": [
+        "tests/browser/test_progress_repository.py",
+    ],
     "Data & contracts": [
         "tests/data/test_card_stability.py",
         "tests/data/test_baseline_comparison.py",

@@ -16,22 +16,27 @@ let settings = JSON.parse(localStorage.getItem(settingsKey) || "{}");
 // pull and is usable during the first renderHome() (before HSK_APP exists).
 // It never writes/marks-dirty; the existing write path (saveSettings) is unchanged.
 const settingsRepo = window.HSKUtil.createSettingsRepository(() => settings);
+// Read-only progress read seam (Phase 8) over the live `progress` binding: freezes
+// the getCardState default-state contract. Injected into the read-only queries below
+// so they no longer read the raw progress object. The write path (gradeCard/save/
+// getCardState) is unchanged and does NOT go through this repository.
+const progressRepo = window.HSKUtil.createProgressRepository({ progressProvider: () => progress });
 // Read-only Study session card-SELECTION seam (Phase 5). Owns no session state:
 // it only reads cards/progress/date/random and returns the card list to seed a
-// session. Progress is read through a live provider so cloud-pull reassignment and
-// account switches are observed (no stale progress). today() is hoisted below.
+// session. Progress is read through the ProgressRepository so cloud-pull reassignment
+// and account switches are observed (no stale progress). today() is hoisted below.
 const sessionQuery = window.HSKUtil.createStudySessionQuery({
   cardRepository: cardRepo,
-  progressProvider: () => progress,
+  progressRepository: progressRepo,
   dateProvider: () => today(),
   randomProvider: Math.random
 });
-// Read-only analytics/dashboard read-model seam (Phase 6). Own instance over the
-// live `progress` binding so it works during the first renderHome() (before HSK_APP)
-// and observes reloadState() reassignment. Returns data only; renderHome does the DOM.
+// Read-only analytics/dashboard read-model seam (Phase 6). Reads progress via the
+// ProgressRepository (live `progress` binding) so it works during the first
+// renderHome() (before HSK_APP) and observes reloadState(). Returns data only.
 const analytics = window.HSKUtil.createAnalyticsQuery({
   cardRepository: cardRepo,
-  progressProvider: () => progress,
+  progressRepository: progressRepo,
   settingsRepository: settingsRepo,
   dailyCountsProvider: () => (window.HSKMeta && window.HSKMeta.dailyCounts()) || {},
   dateProvider: () => new Date()

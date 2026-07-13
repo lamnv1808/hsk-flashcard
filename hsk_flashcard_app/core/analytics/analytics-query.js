@@ -40,11 +40,10 @@
       return (typeof p === "function") ? p : function () { return p || empty; };
     }
 
-    // Mirror of app.js getCardState(): live row else the SAME default shape.
-    // Reading NEVER writes the row (untouched card stays untouched).
-    function stateOf(prog, id, todayStr) {
-      return prog[id] || { due: todayStr, interval: 0, reps: 0, correct: 0, attempts: 0 };
-    }
+    // Read-only progress reads go through ProgressRepository (Phase 8). Injected
+    // when available; otherwise built once from the existing progressProvider.
+    var progressRepo = deps.progressRepository ||
+      NS.createProgressRepository({ progressProvider: getProgress });
 
     /* -------------------- HOME / DASHBOARD SUMMARY -------------------- */
     // Global counts (over ALL cards / ALL progress rows), matching renderHome:
@@ -53,7 +52,6 @@
     //   retention= attempts ? round(correct/attempts*100)+"%" : "0%"
     //   dueCount = cards in `levels` with due<=today (untouched count as due)
     function getHomeSummary(levels) {
-      var prog = getProgress();
       var todayStr = DATE.isoDay(getNow());
       var all = repo.getAll();
       var levelSet = null;
@@ -61,12 +59,12 @@
 
       var learned = 0, dueCount = 0;
       for (var j = 0; j < all.length; j++) {
-        var c = all[j], st = stateOf(prog, c.id, todayStr);
+        var c = all[j], st = progressRepo.getOrDefault(c.id, todayStr);
         if (st.reps > 0) learned++;
         if ((!levelSet || levelSet[c.level] === true) && st.due <= todayStr) dueCount++;
       }
-      var attempts = 0, correct = 0, keys = Object.keys(prog);
-      for (var k = 0; k < keys.length; k++) { var x = prog[keys[k]]; attempts += (x.attempts || 0); correct += (x.correct || 0); }
+      var attempts = 0, correct = 0, keys = progressRepo.getCardIds();
+      for (var k = 0; k < keys.length; k++) { var x = progressRepo.getStored(keys[k]); attempts += (x.attempts || 0); correct += (x.correct || 0); }
 
       var retentionPct = attempts ? Math.round(correct / attempts * 100) : 0;
       return {
@@ -83,7 +81,6 @@
     // Per-level rows in the given order: {level,total,learned,due,pct}.
     // pct = round(learned/total*100) (matches renderHome; total 0 -> NaN as before).
     function getLevelSummary(levels) {
-      var prog = getProgress();
       var todayStr = DATE.isoDay(getNow());
       var order = (levels && levels.length) ? levels : repo.getLevels();
       var out = [];
@@ -91,7 +88,7 @@
         var lv = order[i], all = repo.getByLevel(lv);
         var learned = 0, due = 0;
         for (var j = 0; j < all.length; j++) {
-          var st = stateOf(prog, all[j].id, todayStr);
+          var st = progressRepo.getOrDefault(all[j].id, todayStr);
           if (st.reps > 0) learned++;
           if (st.due <= todayStr) due++;
         }
@@ -121,11 +118,11 @@
     // Ranked weak-word read model (== insights.weakCards). level "all"/falsy = no filter.
     // sort: score desc, then failures desc. Untouched/never-failed excluded.
     function getWeakWords(levelFilter) {
-      var prog = getProgress(), nowMs = getNow().getTime(), out = [];
-      Object.keys(prog).forEach(function (id) {
+      var nowMs = getNow().getTime(), out = [];
+      progressRepo.getCardIds().forEach(function (id) {
         var card = repo.getById(Number(id)); if (!card) return;
         if (levelFilter && levelFilter !== "all" && card.level !== levelFilter) return;
-        var st = prog[id], w = weakness(st, nowMs);
+        var st = progressRepo.getStored(id), w = weakness(st, nowMs);
         if (w == null || w <= 0) return;
         out.push({ card: card, st: st, score: w, failures: (st.attempts || 0) - (st.correct || 0), attempts: st.attempts || 0, last: lastGradedDate(st) });
       });
@@ -136,14 +133,14 @@
     /* -------------------- SMART REVIEW MODEL -------------------- */
     // Semantic model behind renderInsights (presentation stays in insights.js).
     function getSmartReviewModel() {
-      var prog = getProgress(), nowMs = getNow().getTime();
-      var touched = Object.keys(prog);
+      var nowMs = getNow().getTime();
+      var touched = progressRepo.getCardIds();
       if (!touched.length) return { hasData: false };
 
       var byLvl = {};
       touched.forEach(function (id) {
         var card = repo.getById(Number(id)); if (!card) return;
-        var st = prog[id], a = st.attempts || 0; if (!a) return;
+        var st = progressRepo.getStored(id), a = st.attempts || 0; if (!a) return;
         var l = byLvl[card.level] || (byLvl[card.level] = { att: 0, cor: 0 });
         l.att += a; l.cor += (st.correct || 0);
       });

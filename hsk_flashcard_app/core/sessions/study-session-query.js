@@ -42,12 +42,10 @@
     var rnd = (typeof deps.randomProvider === "function")
       ? deps.randomProvider
       : Math.random;
-
-    // Mirror of app.js getCardState(): live progress row, else the SAME default
-    // object shape. Reading NEVER writes the row (untouched stays untouched).
-    function stateOf(prog, id, now) {
-      return prog[id] || { due: now, interval: 0, reps: 0, correct: 0, attempts: 0 };
-    }
+    // Read-only progress reads go through ProgressRepository (Phase 8). Injected
+    // when available; otherwise built once from the existing progressProvider.
+    var progressRepo = deps.progressRepository ||
+      NS.createProgressRepository({ progressProvider: getProgress });
 
     // Resolve `limit` exactly like app.js: "all" => whole pool; else slice(0, Number).
     // Number("20")=20; Number("all") never reached ("all" handled first). Preserves
@@ -65,7 +63,6 @@
       var levels = opts.levels || [];
       var limit = opts.limit;
       var now = getToday();
-      var prog = getProgress();
       var levelSet = {};
       for (var i = 0; i < levels.length; i++) levelSet[levels[i]] = true;
       var inLevel = function (c) { return levelSet[c.level] === true; };
@@ -73,8 +70,8 @@
       // getAll() is the live source array (read-only); .filter() makes fresh arrays,
       // so source order is preserved and the source is never mutated.
       var all = repo.getAll();
-      var due = all.filter(function (c) { return inLevel(c) && stateOf(prog, c.id, now).due <= now; });
-      var fresh = all.filter(function (c) { return inLevel(c) && stateOf(prog, c.id, now).reps === 0; });
+      var due = all.filter(function (c) { return inLevel(c) && progressRepo.getOrDefault(c.id, now).due <= now; });
+      var fresh = all.filter(function (c) { return inLevel(c) && progressRepo.getOrDefault(c.id, now).reps === 0; });
 
       var dueIds = {};
       for (var d = 0; d < due.length; d++) dueIds[due[d].id] = true;
@@ -109,7 +106,6 @@
       opts = opts || {};
       var levels = opts.levels || [];
       var now = getToday();
-      var prog = getProgress();
       var levelSet = {};
       for (var i = 0; i < levels.length; i++) levelSet[levels[i]] = true;
       var all = repo.getAll();
@@ -117,7 +113,7 @@
       for (var j = 0; j < all.length; j++) {
         var c = all[j];
         if (levelSet[c.level] !== true) continue;
-        var st = stateOf(prog, c.id, now);
+        var st = progressRepo.getOrDefault(c.id, now);
         if (st.due <= now) due.push(c.id);
         if (st.reps === 0) fresh.push(c.id);
       }
