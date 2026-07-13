@@ -35,6 +35,9 @@ GROUPS = {
     "StudySessionEngine (Phase 16)": [
         "tests/browser/test_study_session_engine.py",
     ],
+    "StudySessionStateMachine (Phase 19)": [
+        "tests/browser/test_study_session_state_machine.py",
+    ],
     "AnalyticsQuery (Phase 6)": [
         "tests/browser/test_analytics_query.py",
     ],
