@@ -41,6 +41,9 @@ GROUPS = {
     "ProgressRepository (Phase 8)": [
         "tests/browser/test_progress_repository.py",
     ],
+    "TestModeQuery (Phase 9)": [
+        "tests/browser/test_test_mode_query.py",
+    ],
     "Data & contracts": [
         "tests/data/test_card_stability.py",
         "tests/data/test_baseline_comparison.py",

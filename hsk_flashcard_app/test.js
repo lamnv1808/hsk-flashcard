@@ -10,28 +10,19 @@
   "use strict";
 
   var $ = function (id) { return document.getElementById(id); };
-  var CARDS = window.HSK_CARDS || [];
+  // Read-only question generation lives in core/testing/test-mode-query.js (Phase 9);
+  // test.js owns all mutable session/UI/score/reveal/history state below.
+  var TMQ = window.HSKUtil.testMode;
+  var TYPE_DEFS = TMQ.getTypeDefs();          // type model (id/label/q/a), for the picker + labels
+  function typeDef(id) { return TMQ.typeDef(id); }
 
-  // Six question types. q = field shown as the prompt; a = field(s) used for choices.
-  var TYPE_DEFS = [
-    { id: 1, label: "Hán tự → Pinyin",        q: "word",   a: ["pinyin"] },
-    { id: 2, label: "Pinyin → Hán tự",        q: "pinyin", a: ["word"] },
-    { id: 3, label: "Hán tự → Nghĩa",         q: "word",   a: ["meaning"] },
-    { id: 4, label: "Pinyin → Nghĩa",         q: "pinyin", a: ["meaning"] },
-    { id: 5, label: "Hán tự → Pinyin + Nghĩa", q: "word",   a: ["pinyin", "meaning"] },
-    { id: 6, label: "Pinyin → Hán tự + Nghĩa", q: "pinyin", a: ["word", "meaning"] }
-  ];
-  function typeDef(id) { for (var i = 0; i < TYPE_DEFS.length; i++) if (TYPE_DEFS[i].id === id) return TYPE_DEFS[i]; return null; }
-
-  var LEVELS = window.HSKUtil.levels.levelsFromCards(CARDS);
+  var LEVELS = window.HSKUtil.cards.getLevels();
 
   // -------- setup state (independent of Study Mode) --------
   var setup = { levels: [LEVELS[0] || "HSK1"], count: "20", types: [1, 2, 3, 4, 5, 6], mix: false };
   var state = null; // active test session
 
   // ---------------- utils ----------------
-  // Fisher-Yates moved to core/util/shuffle.js: HSKUtil.shuffle.shuffleInPlace / shuffledCopy
-  function trim(x) { return String(x == null ? "" : x).trim(); }
   function esc(el, text) { el.textContent = text; return el; }
   function fmtDuration(ms) { var s = Math.round(ms / 1000); var m = (s / 60) | 0; s = s % 60; return m + ":" + (s < 10 ? "0" : "") + s; }
 
@@ -39,79 +30,12 @@
     document.querySelectorAll(".view").forEach(function (v) { v.classList.toggle("active", v.id === id); });
   }
 
-  // ---------------- question model ----------------
-  function qField(type) { return typeDef(type).q; }
-  function answerLines(card, type) { return typeDef(type).a.map(function (f) { return trim(card[f]); }); }
-  function answerKey(card, type) { return answerLines(card, type).join(""); }
-  function answerValid(card, type) { return typeDef(type).a.every(function (f) { return trim(card[f]) !== ""; }); }
-  function questionValid(card, type) { return trim(card[qField(type)]) !== "" && answerValid(card, type); }
-
-  // Pick up to n distractor cards with distinct visible answer text (random sampling + linear fallback).
-  // Also skip candidates whose PROMPT field equals the correct card's prompt (e.g. homophones),
-  // so the prompt has exactly one valid answer among the choices.
-  function pickDistractors(card, pool, type, n) {
-    var qf = qField(type), qVal = trim(card[qf]);
-    var seen = {}; seen[answerKey(card, type)] = 1;
-    var out = [], attempts = 0, maxA = Math.min(160, pool.length * 3);
-    function usable(c) {
-      return c.id !== card.id && answerValid(c, type) && trim(c[qf]) !== qVal && !seen[answerKey(c, type)];
-    }
-    while (out.length < n && attempts < maxA) {
-      attempts++;
-      var c = pool[(Math.random() * pool.length) | 0];
-      if (!usable(c)) continue;
-      seen[answerKey(c, type)] = 1; out.push(c);
-    }
-    if (out.length < n) {
-      for (var i = 0; i < pool.length && out.length < n; i++) {
-        var d = pool[i];
-        if (!usable(d)) continue;
-        seen[answerKey(d, type)] = 1; out.push(d);
-      }
-    }
-    return out;
-  }
-
-  // Build one question, or null if a valid (>=2 distinct options) question is impossible.
-  function buildQuestion(card, pool, type) {
-    if (!questionValid(card, type)) return null;
-    var distractors = pickDistractors(card, pool, type, 3);
-    if (distractors.length < 1) return null; // need at least one alternative
-    var opts = [{ card: card, isCorrect: true }];
-    distractors.forEach(function (c) { opts.push({ card: c, isCorrect: false }); });
-    window.HSKUtil.shuffle.shuffleInPlace(opts);
-    return {
-      card: card, type: type,
-      options: opts.map(function (o) { return { card: o.card, isCorrect: o.isCorrect, lines: answerLines(o.card, type) }; }),
-      correctIndex: opts.map(function (o) { return o.isCorrect; }).indexOf(true),
-      answeredIndex: null, correct: null, revealed: false
-    };
-  }
-
-  function firstBuildable(card, pool, types) {
-    var order = window.HSKUtil.shuffle.shuffledCopy(types);
-    for (var i = 0; i < order.length; i++) { var q = buildQuestion(card, pool, order[i]); if (q) return q; }
-    return null;
-  }
-
-  function buildTest(cfg) {
-    var pool = CARDS.filter(function (c) { return cfg.levels.indexOf(c.level) >= 0; });
-    var types = cfg.mix ? [1, 2, 3, 4, 5, 6] : cfg.types.slice();
-    var N = cfg.count === "all" ? pool.length : Math.min(parseInt(cfg.count, 10), pool.length);
-    var cardOrder = window.HSKUtil.shuffle.shuffledCopy(pool);
-    // balanced type assignment: round-robin then shuffle
-    var assign = [];
-    for (var i = 0; i < N; i++) assign.push(types[i % types.length]);
-    window.HSKUtil.shuffle.shuffleInPlace(assign);
-    var questions = [], idx = 0;
-    while (questions.length < N && idx < cardOrder.length) {
-      var card = cardOrder[idx++];
-      var want = assign[questions.length];
-      var q = buildQuestion(card, pool, want) || firstBuildable(card, pool, types);
-      if (q) questions.push(q);
-    }
-    return questions;
-  }
+  // ---------------- question model (delegated to TestModeQuery, Phase 9) ----------------
+  // The pure logic (eligible pool, prompt/answer formatting, distractors, option
+  // shuffling, session assembly) lives in TMQ. test.js only needs the prompt field
+  // (for display) and createSession (to build the session it then drives).
+  function qField(type) { return TMQ.qField(type); }
+  function buildTest(cfg) { return TMQ.createSession(cfg); }
 
   // ---------------- level picker (reuse chip style) ----------------
   function renderLevelPicker() {
