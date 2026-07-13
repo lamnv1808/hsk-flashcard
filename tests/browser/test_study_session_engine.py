@@ -199,6 +199,58 @@ def main():
         for k in ["storageUnchanged", "cardsUnmutated", "progUnmutated"]:
             check("sideEffect:" + k, se[k])
 
+        # ---- PHASE 17: audio/read settings fields on describeCard ----
+        au = pg.evaluate("""()=>{
+          const cards=__mkCards(1,'HSK1',1);
+          const on=__mkEngine(cards, {}, { settings:{autoReadWord:true, autoReadExample:true, speechRate:1.5} });
+          const off=__mkEngine(cards, {}, { settings:{} });   // defaults
+          const c1=on.describeCard({card:cards[0]}), c0=off.describeCard({card:cards[0]});
+          const bad=__mkEngine(cards, {}, { settings:{speechRate:0.7} });   // legacy -> normalized to 1
+          return {
+            onWord: c1.autoReadWord===true, onExample: c1.autoReadExample===true, rate: c1.speechRate===1.5,
+            defWord: c0.autoReadWord===false, defExample: c0.autoReadExample===false, defRate: c0.speechRate===1,
+            legacyRate: bad.describeCard({card:cards[0]}).speechRate===1
+          };
+        }""")
+        for k in ["onWord", "onExample", "rate", "defWord", "defExample", "defRate", "legacyRate"]:
+            check("audioFlags:" + k, au[k])
+
+        # ---- PHASE 17: DOM EQUIVALENCE — renderCard DOM == describeCard model (real app) ----
+        dom = pg.evaluate("""()=>{
+          // build a production-parity engine over the app's live shared instances
+          const eng=HSKUtil.createStudySessionEngine({
+            contentPack:HSKUtil.contentPack, cardRepository:HSKUtil.cards, progressRepository:HSKUtil.progress,
+            settingsRepository:HSKUtil.settings,
+            studySessionQuery:HSKUtil.createStudySessionQuery({cardRepository:HSKUtil.cards, progressRepository:HSKUtil.progress, dateProvider:()=>new Date().toISOString().slice(0,10), randomProvider:Math.random}),
+            userMetadataQuery:HSKUtil.userMetadata, dateProvider:()=>new Date().toISOString().slice(0,10) });
+          function check1(id){
+            HSK_APP.startSession([id]);   // renders card `id` on the front (flipped=false)
+            const m=eng.describeCard({cardId:id, flipped:false});
+            const T=x=>document.getElementById(x).textContent;
+            return {
+              // front-face DOM receives ONLY front-safe values
+              word: T('word')===m.front.primary,
+              pinyin: T('pinyin')===m.front.pronunciation,
+              level: T('levelBadge')===m.deckId,
+              // back-face DOM (hidden) receives back values
+              meaning: T('meaning')===m.back.definition,
+              example: T('example')===m.back.example,
+              examplePinyin: T('examplePinyin')===m.back.examplePronunciation,
+              translation: T('translation')===m.back.translation,
+              backWord: T('backWord')===m.back.primary,
+              backPinyin: T('backPinyin')===m.back.pronunciation,
+              // front element never carries answer text
+              frontIsNotAnswer: T('word')!==m.back.definition && T('word')!==m.back.translation,
+              notFlipped: document.getElementById('flashcard').classList.contains('flipped')===false
+            };
+          }
+          const c1=check1(1), c6=check1(5002);   // HSK1 first + HSK6 last
+          const ok=o=>Object.keys(o).every(k=>o[k]===true);
+          return { hsk1: ok(c1), hsk6: ok(c6), detail1:c1 };
+        }""")
+        check("dom-equivalence HSK1 card", dom["hsk1"])
+        check("dom-equivalence HSK6 card", dom["hsk6"])
+
         result = {"suite": "study_session_engine", "pass": len(fails) == 0 and len(errs) == 0, "fails": fails, "errors": errs}
         print(json.dumps(result, ensure_ascii=False))
         b.close()

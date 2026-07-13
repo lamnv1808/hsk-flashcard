@@ -114,6 +114,10 @@
         deckId: card[F_DECK],
         flipped: !!opts.flipped,
         frontPinyinVisible: settingsRepo ? settingsRepo.getFrontPinyinEnabled() : true,
+        // audio/read flags (renderCard/flipCard read these; the engine never plays audio)
+        autoReadWord: settingsRepo ? settingsRepo.getAutoReadWordEnabled() : false,
+        autoReadExample: settingsRepo ? settingsRepo.getAutoReadExampleEnabled() : false,
+        speechRate: settingsRepo ? settingsRepo.getSpeechRate() : 1,
         front: {
           primary: card[F_PROMPT],
           pronunciation: card[F_PRON]

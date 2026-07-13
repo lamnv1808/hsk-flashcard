@@ -280,18 +280,22 @@ function renderCard(){
   $("studyLevel").textContent=desc.deckLabel;
   $("cardIndex").textContent=desc.currentNumber; $("cardTotal").textContent=desc.total;
   $("progressBar").style.width=desc.progressPct+"%";
-  $("levelBadge").textContent=c.level; $("word").textContent=c.word; $("pinyin").textContent=c.pinyin;
-  $("meaning").textContent=c.meaning; $("example").textContent=c.example; $("examplePinyin").textContent=c.examplePinyin; $("translation").textContent=c.translation;
+  // Card presentation read model (Phase 17). `front` carries only the prompt (answer-leak
+  // safe) and maps to the FRONT-face elements; `back` maps to the (CSS-hidden) BACK face.
+  // app.js still owns the DOM writes, flip-reset animation guard and audio execution.
+  const m=studyEngine.describeCard({ card: c, flipped: false });
+  $("levelBadge").textContent=m.deckId; $("word").textContent=m.front.primary; $("pinyin").textContent=m.front.pronunciation;
+  $("meaning").textContent=m.back.definition; $("example").textContent=m.back.example; $("examplePinyin").textContent=m.back.examplePronunciation; $("translation").textContent=m.back.translation;
   // Front vocab pinyin (column C) shows on the front by default; when disabled it moves to the back.
-  $("backWord").textContent=c.word; $("backPinyin").textContent=c.pinyin;
+  $("backWord").textContent=m.back.primary; $("backPinyin").textContent=m.back.pronunciation;
   applyPinyinDisplay();
   if(window.HSKMeta) HSKMeta.syncCard();   // bookmark state + hide note zone (front)
   void fc.offsetWidth;                     // force reflow: front + new content painted with no animation
   fc.classList.remove("no-flip-anim");     // restore the flip animation for the next user flip
-  $("flashcard").setAttribute("aria-label",`Thẻ ${current+1}/${session.length}. Từ: ${c.word}. Bấm hoặc nhấn Space để xem nghĩa.`);
-  $("srStatus").textContent=`Thẻ ${current+1} trên ${session.length}. ${c.level}: ${c.word}.`;
+  $("flashcard").setAttribute("aria-label",`Thẻ ${current+1}/${session.length}. Từ: ${m.front.primary}. Bấm hoặc nhấn Space để xem nghĩa.`);
+  $("srStatus").textContent=`Thẻ ${current+1} trên ${session.length}. ${m.deckId}: ${m.front.primary}.`;
   stopSpeech();                       // always stop audio when the card changes
-  if(settingsRepo.getAutoReadWordEnabled()) speakWord();
+  if(m.autoReadWord) speakWord();
   $("flashcard").focus({preventScroll:true});   // keep keyboard focus without scroll jumps
 }
 
