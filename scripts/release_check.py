@@ -22,6 +22,7 @@ Gates (all must pass; exit 0 only when every gate passes, non-zero otherwise):
 There is intentionally NO flag to skip the dirty-tree, branch, sync, precache, or regression gates.
 CLI output is ASCII-only (docs may be UTF-8).
 """
+import ast
 import os
 import re
 import subprocess
@@ -84,11 +85,41 @@ def read_invariants():
     return inv
 
 
+def asset_target(asset):
+    """Resolve a precache path relative to APP and return (path, None) if it is contained inside
+    hsk_flashcard_app, else (None, reason). Rejects URLs/protocol-relative, absolute POSIX paths,
+    Windows drive-absolute and UNC paths, and parent traversal via BOTH '/' and '\\' — with a
+    real-path/commonpath containment check as defense in depth (platform-correct)."""
+    if not asset:
+        return (None, "empty path")
+    if "://" in asset or asset.startswith("//"):
+        return (None, "url/protocol-relative")
+    if asset.startswith("\\\\"):
+        return (None, "UNC path")
+    if re.match(r"^[A-Za-z]:", asset):
+        return (None, "drive-absolute path")
+    if os.path.isabs(asset):
+        return (None, "absolute path")
+    segs = [s for s in re.split(r"[\\/]", asset) if s != ""]
+    if ".." in segs:
+        return (None, "parent traversal")
+    cand = os.path.normpath(os.path.join(APP, *[s for s in segs if s != "."]))
+    try:
+        app_real = os.path.realpath(APP)
+        common = os.path.commonpath([app_real, os.path.realpath(cand)])
+    except ValueError:
+        return (None, "different filesystem root")
+    if common != app_real:
+        return (None, "escapes hsk_flashcard_app")
+    return (cand, None)
+
+
 def sw_inventory():
-    """Parse sw.js READ-ONLY (no JS execution). Returns (cache_version, ok, detail, count).
-    Fails closed if sw.js/the CACHE line/the ASSETS array cannot be found or parsed, or if any
-    listed precache asset is missing on disk. The sw.js ASSETS array is the single source of
-    truth - no second asset list is kept here."""
+    """Parse sw.js READ-ONLY with a STRICT, non-executing parser. Returns (cache_version, ok,
+    detail, count). The sw.js ASSETS array is the single source of truth (no second list here).
+    Fails closed if sw.js / the CACHE line / the ASSETS array is missing or is anything other than
+    a plain list of non-empty string literals (any unparsed token, expression, function call,
+    missing bracket, or non-string entry), or if any listed asset is unsafe or missing on disk."""
     sw = os.path.join(APP, "sw.js")
     if not os.path.isfile(sw):
         return (None, False, "hsk_flashcard_app/sw.js missing", 0)
@@ -100,28 +131,35 @@ def sw_inventory():
     mver = re.search(r"const\s+CACHE\s*=\s*'([^']+)'", text)
     swver = mver.group(1) if mver else None
 
-    marr = re.search(r"\bASSETS\s*=\s*\[(.*?)\]", text, re.S)
+    # Capture the ASSETS array literal [ ... ] (flat list of quoted strings; no nested brackets),
+    # then parse it with ast.literal_eval — literals only, never executing JavaScript. A malformed
+    # array (BROKEN_TOKEN, 'a'+'b', foo(), missing bracket, non-string) raises and fails closed.
+    marr = re.search(r"\bASSETS\s*=\s*(\[.*?\])", text, re.S)
     if not marr:
-        return (swver, False, "sw.js ASSETS precache array not found (fail-closed)", 0)
-    items = re.findall(r"""['"]([^'"]+)['"]""", marr.group(1))
-    if not items:
-        return (swver, False, "sw.js ASSETS array is empty/unparseable (fail-closed)", 0)
+        return (swver, False, "sw.js ASSETS array not found / no closing bracket (fail-closed)", 0)
+    try:
+        items = ast.literal_eval(marr.group(1))
+    except Exception:
+        return (swver, False, "sw.js ASSETS is not a plain list of string literals (fail-closed)", 0)
+    if not isinstance(items, (list, tuple)) or not items:
+        return (swver, False, "sw.js ASSETS is empty or not a list (fail-closed)", 0)
+    if not all(isinstance(a, str) and a != "" for a in items):
+        return (swver, False, "sw.js ASSETS contains a non-string/empty entry (fail-closed)", 0)
 
-    missing = []
+    problems = []
     for a in items:
-        parts = a.split("/")
-        if ".." in parts:
-            missing.append(a + " (unsafe path)"); continue
         if a in ("./", "."):
             if not os.path.isdir(APP):
-                missing.append(a)
+                problems.append(a + " (app root missing)")
             continue
-        rel = a[2:] if a.startswith("./") else a
-        if not os.path.isfile(os.path.join(APP, *rel.split("/"))):
-            missing.append(a)
+        target, reason = asset_target(a)
+        if reason:
+            problems.append(a + " (" + reason + ")")
+        elif not os.path.isfile(target):
+            problems.append(a + " (missing)")
 
-    if missing:
-        return (swver, False, "missing precache asset(s): " + ", ".join(missing), len(items))
+    if problems:
+        return (swver, False, "invalid/missing precache asset(s): " + ", ".join(problems), len(items))
     return (swver, True, str(len(items)) + " precache assets verified", len(items))
 
 

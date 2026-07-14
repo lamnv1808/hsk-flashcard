@@ -162,6 +162,54 @@ def main():
         check("missing ASSETS array -> fail closed", code != 0)
         check("no ASSETS: precache gate FAIL", "FAIL  sw.js precache inventory verified" in out)
 
+        # === Finding 2 (hardened): strict ASSETS parsing + path containment ===
+        def sw_case(name, assets_line, external=None):
+            repo = os.path.join(base, name)
+            scaffold(repo, sw_override="const CACHE='hsk-flashcards-v35';\n" + assets_line + "\n")
+            if external:  # create a file OUTSIDE hsk_flashcard_app that a traversal would resolve to
+                write(os.path.join(repo, external), "external\n")
+                run_git(repo, "add", "-A"); run_git(repo, "commit", "-q", "-m", "ext")
+                h = run_git(repo, "rev-parse", "HEAD").stdout.strip()
+                run_git(repo, "update-ref", "refs/remotes/origin/main", h)
+            return repo, run_check(repo)
+
+        fail_cases = [
+            ("mixed_broken", "const ASSETS=['index.html', BROKEN_TOKEN];", None, "mixed valid + BROKEN_TOKEN"),
+            ("expr_entry", "const ASSETS=['index.html', 'a' + '.js'];", None, "expression entry"),
+            ("func_entry", "const ASSETS=['index.html', foo()];", None, "function-call entry"),
+            ("nonstr_entry", "const ASSETS=['index.html', 123];", None, "non-string entry"),
+            ("bslash_trav", "const ASSETS=['index.html','..\\\\outside.txt'];", "outside.txt", "backslash traversal (external exists)"),
+            ("fslash_trav", "const ASSETS=['index.html','../outside.txt'];", "outside.txt", "forward-slash traversal"),
+            ("abs_path", "const ASSETS=['index.html','/etc/passwd'];", None, "absolute path"),
+            ("drive_path", "const ASSETS=['index.html','C:/Windows/win.ini'];", None, "windows drive path"),
+            ("url_entry", "const ASSETS=['index.html','https://evil.example/x.js'];", None, "url entry"),
+            ("proto_rel", "const ASSETS=['index.html','//evil.example/x.js'];", None, "protocol-relative entry"),
+            ("missing_bracket", "const ASSETS=['index.html', 'app.js'", None, "missing closing bracket"),
+        ]
+        for name, line, ext, label in fail_cases:
+            repo, (code, out) = sw_case(name, line, ext)
+            check("ASSETS %s -> non-zero" % label, code != 0)
+            check("ASSETS %s -> precache gate FAIL" % label, "FAIL  sw.js precache inventory verified" in out)
+            check("ASSETS %s -> no manual steps" % label, "Manual Deploy" not in out)
+            st = run_git(repo, "status", "--porcelain", "--untracked-files=all").stdout.strip()
+            check("ASSETS %s -> repo unchanged" % label, st == "")
+        # containment reason surfaced for a traversal case (rejected as unsafe, not merely missing)
+        _, (_, tout) = sw_case("bslash_reason", "const ASSETS=['index.html','..\\\\outside.txt'];", "outside.txt")
+        check("backslash traversal rejected as unsafe (containment, not missing)", "traversal" in tout)
+        # current formatting with a trailing comma still passes
+        _, (code, out) = sw_case("trailing_comma",
+                                 "const ASSETS=['./','index.html','app.js','styles.css','data.js','sw.js','core/platform/platform.js',];")
+        check("trailing-comma ASSETS passes (exit 0)", code == 0)
+        check("trailing-comma: precache verified", "precache assets verified" in out)
+        # the REAL production sw.js (all 36 entries) passes the actual helper's parser
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("relcheck_mod", SRC)
+        relmod = importlib.util.module_from_spec(spec); spec.loader.exec_module(relmod)
+        r_swver, r_ok, r_detail, r_count = relmod.sw_inventory()
+        check("real sw.js precache verified", r_ok is True)
+        check("real sw.js has exactly 36 precache assets", r_count == 36)
+        check("real sw.js cache is v35", r_swver == "hsk-flashcards-v35")
+
         # === Finding 3: git command failures fail closed ===
         # not a git work tree
         ng = os.path.join(base, "not_git"); os.makedirs(os.path.join(ng, "scripts"), exist_ok=True)

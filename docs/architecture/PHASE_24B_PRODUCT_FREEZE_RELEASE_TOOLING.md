@@ -23,9 +23,15 @@ path (spaces supported), runs only read-only git (`rev-parse`, `status`), and en
 4. working tree completely clean (staged + unstaged + untracked)
 5. local `main` == local `origin/main`
 6. service-worker cache version present (reported exactly)
-7. the **full `sw.js` precache inventory** (its `ASSETS` array) is parsed read-only (no JS execution)
-   and every listed path verified to exist — fails closed if the array is missing/unparseable; the
-   count of verified assets is reported (no second drifting asset list is kept in Python)
+7. the **full `sw.js` precache inventory** (its `ASSETS` array) is parsed **strictly** and read-only —
+   the array literal is isolated and parsed with `ast.literal_eval` (literals only; **never executes
+   JS**), so any unparsed token, expression (`'a'+'b'`), function call (`foo()`), missing bracket, or
+   non-string/empty entry **fails closed**. Every listed path must resolve **inside**
+   `hsk_flashcard_app` (except the intentional `./` app-root entry): URLs/protocol-relative, absolute
+   POSIX paths, Windows drive-absolute and UNC paths, and parent traversal via **both** `/` and `\\`
+   are rejected (with a real-path/`commonpath` containment check as defense in depth — a traversal is
+   rejected even when the external target exists). Every remaining path must exist; the count of
+   verified assets is reported (the real inventory is **36**; no second asset list is kept in Python)
 8. full regression (`tests/run_regression.py`, run with the current interpreter) passes
 9. **post-regression revalidation:** branch/HEAD/main/origin-main and cleanliness are snapshotted
    before regression and re-checked after — since regression is executable code, any mutation
@@ -41,10 +47,23 @@ revalidation); non-zero on any failed gate. On success it reports the exact HEAD
 version + verified precache-asset count and prints (but never executes) the owner's manual Render
 deploy steps. On failure it prints the failed gates and **no** deploy steps.
 
-## Manual Render workflow (printed by the helper on success; owner performs it)
-1. Confirm the reported commit. 2. Render → the FlashEdu Static Site → Manual Deploy → Deploy latest
-commit. 3. Wait until Live. 4. Hard-refresh / fresh browser context so SW `v35` activates. 5. Run
-[PRODUCTION_SMOKE_CHECKLIST.md](../release/PRODUCTION_SMOKE_CHECKLIST.md).
+## Release ordering — `release_check.py` is a POST-PUSH, PRE-DEPLOY gate
+The helper requires `main == origin/main`, so it is designed to run on a **clean, synchronized main
+after the push**, immediately **before** the manual Render deploy. The correct future runtime-release
+order is:
+1. Merge the phase branch locally into `main` (`git merge --no-ff`).
+2. Run `python tests/run_regression.py` on local `main`.
+3. **Push** `main` to origin (`git push origin main`).
+4. Run `python scripts/release_check.py` on the clean, synchronized `main`.
+5. Only if it passes, **manually** deploy on Render (Static Site → Manual Deploy → Deploy latest commit); wait until Live.
+6. Hard-refresh / fresh browser context so SW `v35` activates; run
+   [PRODUCTION_SMOKE_CHECKLIST.md](../release/PRODUCTION_SMOKE_CHECKLIST.md).
+
+Note: running `release_check.py` **after the local merge but before the push is expected to FAIL** the
+`main == origin/main` gate — that is intentional; the synchronized-main gate is not relaxed to permit
+an ahead-of-origin `main`. Phase 24B itself changes only tooling/docs/tests, so it does **not** require
+a Render deployment (`hsk_flashcard_app` is byte-unchanged). The step list the helper prints on success
+mirrors steps 5–6.
 
 ## Tests — `tests/tooling/test_release_check.py` (registered → 35/35)
 Isolated temporary git repos + a **stubbed** `tests/run_regression.py` (no browser/network) whose
