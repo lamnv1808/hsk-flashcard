@@ -44,15 +44,33 @@
 
   /* ---------------- daily learning (Study Mode grades, once/card/day) ---------------- */
   function dailyCounts() { var s = S(); return (s.dailyCounts && typeof s.dailyCounts === "object") ? s.dailyCounts : {}; }
+  // Local calendar "yesterday" — decremented in LOCAL space then read via localDay()'s local
+  // components (no UTC serialization), so month/year/leap/DST boundaries stay calendar-correct.
+  function localYesterday() { var d = new Date(); d.setDate(d.getDate() - 1); return localDay(d); }
+  // Normalize a possibly missing/corrupt streak to a non-negative integer.
+  function normStreak(v) { return (typeof v === "number" && isFinite(v) && v > 0) ? Math.floor(v) : 0; }
+
   function recordDailyLearn(id) {
     var s = S(), day = localDay();
-    var tl = (s.todayLearn && s.todayLearn.day === day) ? s.todayLearn : { day: day, ids: [] };
-    if (tl.ids.indexOf(id) >= 0) return;   // already counted today -> once per card per day
+    var isNewDay = !(s.todayLearn && s.todayLearn.day === day);   // first counted card of this local day?
+    var tl = isNewDay ? { day: day, ids: [] } : s.todayLearn;
+    if (tl.ids.indexOf(id) >= 0) return;   // already counted today -> once per card per day (no persist)
     tl.ids.push(id); s.todayLearn = tl;
+    // Phase 22B streak (metadata owns the daily-activity write): the FIRST unique graded card of a
+    // local day activates the day. Same trigger/day-basis as the daily count above — Again/Hard/Good/
+    // Easy all qualify; Skip and Test Mode never reach here; regrade/duplicate hit the early return.
+    if (isNewDay) {
+      var st = normStreak(s.streak), prev = s.lastLearnDay;
+      if (prev === undefined || prev === null || prev === "") s.streak = Math.max(st, 1);   // lazy migration: preserve existing, or activate a fresh user
+      else if (prev === day) s.streak = st;                 // already active today -> unchanged
+      else if (prev === localYesterday()) s.streak = st + 1; // consecutive local day -> +1
+      else s.streak = 1;                                     // older / future / corrupt anchor -> reset to today
+      s.lastLearnDay = day;                                  // local-day anchor (settings.lastStudy left inert)
+    }
     if (!s.dailyCounts || typeof s.dailyCounts !== "object") s.dailyCounts = {};
     s.dailyCounts[day] = (s.dailyCounts[day] || 0) + 1;
     pruneDaily(s.dailyCounts);
-    persist();
+    persist();   // exactly one settings save + one sync-dirty notification for the qualifying grade
   }
   function pruneDaily(dc) {
     var keys = Object.keys(dc);
