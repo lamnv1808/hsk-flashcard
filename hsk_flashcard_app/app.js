@@ -631,7 +631,11 @@ setAppHeight();
 window.addEventListener("resize", setAppHeight);
 window.addEventListener("orientationchange", setAppHeight);
 
-if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
+// Phase 24A: register the service worker via the platform adapter (web/PWA registers as before;
+// a future native shell skips it — bundled assets, no SW). Stop any active speech when the app is
+// backgrounded/hidden (reuses the existing stopSpeech path); returning to foreground never auto-plays.
+HSKUtil.platform.registerServiceWorker("sw.js");
+HSKUtil.platform.onBackground(stopSpeech);
 renderHome();
 
 // Bridge for the (optional) cloud-sync layer. No-op in local-only mode.
