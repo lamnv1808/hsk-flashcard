@@ -118,28 +118,64 @@ with sync_playwright() as p:
                      fill: document.getElementById('dailyGoalBarFill').style.width,
                      sel: document.getElementById('dailyGoalSelect').value,
                      amax: bar.getAttribute('aria-valuemax'), anow: bar.getAttribute('aria-valuenow'),
-                     amin: bar.getAttribute('aria-valuemin'), role: bar.getAttribute('role') };
+                     amin: bar.getAttribute('aria-valuemin'), role: bar.getAttribute('role'),
+                     atext: bar.getAttribute('aria-valuetext') };
         }""")
     pg.evaluate("()=>{ progress={}; if(settings.dailyCounts) delete settings.dailyCounts; renderHome(); }")
     z = home_dg(pg)
     check('home 0/20 text', z['text'] == '0/20 thẻ'); check('home 0% fill', z['fill'] == '0%')
     check('home role progressbar', z['role'] == 'progressbar'); check('home aria min 0', z['amin'] == '0')
     check('home aria max 20', z['amax'] == '20'); check('home aria now 0', z['anow'] == '0')
-    # partial (goal 20, learned 5)
-    pg.evaluate("()=>{ settings.dailyCounts={[HSKMeta.localDay()]:5}; settings.dailyGoal=20; renderHome(); }")
+    check('home aria text 0/20', z['atext'] == '0 trên 20 thẻ')
+    # partial (goal 20, learned 17 -> valid capped range, uncapped valuetext, no completion)
+    pg.evaluate("()=>{ settings.dailyCounts={[HSKMeta.localDay()]:17}; settings.dailyGoal=20; renderHome(); }")
     pr = home_dg(pg)
-    check('home partial 5/20', pr['text'] == '5/20 thẻ'); check('home partial 25% fill', pr['fill'] == '25%')
-    check('home partial aria now 5', pr['anow'] == '5')
-    # reached (goal 10, learned 10)
+    check('home partial 17/20', pr['text'] == '17/20 thẻ'); check('home partial 85% fill', pr['fill'] == '85%')
+    check('home partial aria now 17', pr['anow'] == '17'); check('home partial aria max 20', pr['amax'] == '20')
+    check('home partial aria text (no completion)', pr['atext'] == '17 trên 20 thẻ')
+    # reached (goal 10, learned 10 -> valuenow==max, completion in valuetext)
     pg.evaluate("()=>{ settings.dailyCounts={[HSKMeta.localDay()]:10}; settings.dailyGoal=10; renderHome(); }")
     rc = home_dg(pg)
     check('home reached 10/10', rc['text'] == '10/10 thẻ'); check('home reached 100% fill', rc['fill'] == '100%')
     check('home select 10', rc['sel'] == '10'); check('home reached aria max 10', rc['amax'] == '10')
-    # exceeded (goal 20, learned 25 -> shows real value, bar capped)
+    check('home reached aria now 10', rc['anow'] == '10')
+    check('home reached aria text completion', rc['atext'] == '10 trên 10 thẻ, đã hoàn thành mục tiêu')
+    # exceeded (goal 20, learned 25 -> real value visible, bar capped, aria capped, uncapped valuetext)
     pg.evaluate("()=>{ settings.dailyCounts={[HSKMeta.localDay()]:25}; settings.dailyGoal=20; renderHome(); }")
     ex = home_dg(pg)
-    check('home exceeded 25/20', ex['text'] == '25/20 thẻ'); check('home exceeded bar capped 100%', ex['fill'] == '100%')
-    check('home exceeded aria now 25', ex['anow'] == '25'); check('home exceeded aria max 20', ex['amax'] == '20')
+    check('home exceeded 25/20 (visible uncapped)', ex['text'] == '25/20 thẻ')
+    check('home exceeded bar capped 100%', ex['fill'] == '100%')
+    check('home exceeded aria now capped to 20', ex['anow'] == '20')
+    check('home exceeded aria max 20', ex['amax'] == '20')
+    check('home exceeded aria text uncapped + completion', ex['atext'] == '25 trên 20 thẻ, đã hoàn thành mục tiêu')
+
+    # ---- DOM placement (Finding 1) + single-ID contract ----
+    dom = pg.evaluate("""()=>{
+        const F=Node.DOCUMENT_POSITION_FOLLOWING;
+        const hero=document.querySelector('#homeView .hero');
+        const panel=document.getElementById('dailyGoalPanel');
+        const chon=[...document.querySelectorAll('#homeView .section-title h3')].find(h=>h.textContent.trim()==='Chọn bộ học');
+        const chonSection=chon?chon.closest('.section-title'):null;
+        const ids=['dailyGoalPanel','dailyGoalSelect','dailyGoalText','dailyGoalBar','dailyGoalBarFill'];
+        const counts={}; ids.forEach(id=>counts[id]=document.querySelectorAll('#'+id).length);
+        return {
+            panelAfterHero: !!(hero && panel && (hero.compareDocumentPosition(panel)&F)),
+            panelBeforeChon: !!(panel && chonSection && (panel.compareDocumentPosition(chonSection)&F)),
+            counts
+        };
+    }""")
+    check('panel is after the hero', dom['panelAfterHero'])
+    check('panel is before "Chọn bộ học"', dom['panelBeforeChon'])
+    for _id in ['dailyGoalPanel','dailyGoalSelect','dailyGoalText','dailyGoalBar','dailyGoalBarFill']:
+        check('exactly one #' + _id, dom['counts'][_id] == 1)
+
+    # ---- Reduced motion (Finding 3): the fill transition is disabled under reduce ----
+    rm_ctx = b.new_context(viewport={'width': 390, 'height': 844}, reduced_motion='reduce')
+    rm_ctx.route('**/supabase-config.js', lambda r: r.fulfill(status=200, content_type='application/javascript', body=EMPTY))
+    rm_pg = rm_ctx.new_page(); rm_pg.goto(URL); rm_pg.wait_for_timeout(300)
+    rm = rm_pg.evaluate("()=>getComputedStyle(document.getElementById('dailyGoalBarFill')).transitionDuration")
+    check('reduced-motion disables dg-bar fill transition', rm in ('0s', '0'))
+    rm_ctx.close()
     # invalid stored value -> fallback 20 after reload
     pg.evaluate("""()=>{ const s=JSON.parse(localStorage.getItem('hsk_flashcard_settings_v2')||'{}'); s.dailyGoal=15; localStorage.setItem('hsk_flashcard_settings_v2', JSON.stringify(s)); }""")
     pg.reload(); pg.wait_for_timeout(300)
@@ -177,15 +213,28 @@ with sync_playwright() as p:
     check('acknowledgment hidden below goal', 'complete-goal-done' not in hb)  # 10 < 20
     # Phase 21 gating intact: level session with due remaining -> continue shown
     check('P21 continue still shown (levels+due)', pg.evaluate("()=>document.getElementById('continueStudyBtn').hidden")==False)
-    # reached-goal acknowledgment: force learned >= goal, finish an explicit session
-    pg.evaluate("()=>{ settings.dailyCounts={[HSKMeta.localDay()]:20}; settings.dailyGoal=20; }")
+    # reached/exceeded-goal acknowledgment + valid capped completion ARIA: force learned > goal,
+    # finish an explicit session (fresh2 grade increments today's count to >20).
+    pg.evaluate("()=>{ settings.dailyCounts={[HSKMeta.localDay()]:25}; settings.dailyGoal=20; }")
     fresh2 = pg.evaluate("()=>cards.filter(c=>c.level==='HSK3')[0].id")
     pg.evaluate("(id)=>HSK_APP.startSession([id])", fresh2); pg.wait_for_timeout(80)
     grade_current(pg, 'good'); pg.wait_for_timeout(60)
     hb2 = pg.evaluate("()=>document.getElementById('completeHabit').innerHTML")
+    learned2 = count(pg)  # >= 25 (was 25, fresh2 is new -> counted)
     check('acknowledgment visible at/above goal', 'complete-goal-done' in hb2 and 'Đã hoàn thành mục tiêu hôm nay.' in hb2)
     check('explicit continue hidden', pg.evaluate("()=>document.getElementById('continueStudyBtn').hidden")==True)
     check('explicit: single today item', hb2.count('Đã học hôm nay') == 1)
+    check('completion shows uncapped learned/20', ('%d/20' % learned2) in hb2)
+    cbar = pg.evaluate("""()=>{ const el=document.querySelector('#completeHabit .complete-goalbar');
+        return el ? { amax: el.getAttribute('aria-valuemax'), anow: el.getAttribute('aria-valuenow'),
+                      amin: el.getAttribute('aria-valuemin'), atext: el.getAttribute('aria-valuetext'),
+                      fill: el.querySelector('span').style.width } : null; }""")
+    check('completion goalbar present', cbar is not None)
+    check('completion aria max = goal 20', cbar['amax'] == '20')
+    check('completion aria now capped to 20', cbar['anow'] == '20')
+    check('completion aria min 0', cbar['amin'] == '0')
+    check('completion aria text uncapped + completion', cbar['atext'] == ('%d trên 20 thẻ, đã hoàn thành mục tiêu' % learned2))
+    check('completion bar capped 100%', cbar['fill'] == '100%')
 
     check('no console/page errors', len(errs) == 0)
     ctx.close(); b.close()

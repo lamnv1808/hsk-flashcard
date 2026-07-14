@@ -30,12 +30,25 @@ Review) contribute normally. Phase 22A changes none of this.
   and completion for a single consistent calculation.
 
 ## Home behavior
-New "Mục tiêu hằng ngày" panel between Hiển thị and the stats grid:
+New "Mục tiêu hằng ngày" panel placed **immediately after the Home hero, before the "Chọn bộ học"
+section** (review follow-up), so the daily-habit signal is near the top of the mobile flow. It does
+not modify the hero and is not nested inside a card.
 - `#dailyGoalSelect` (10/20/30/50 thẻ) with a real `<label for>`; on change → parse, accept only
   10/20/30/50, `settings.dailyGoal=v`, `saveSettings()` **once**, then re-render (render never writes).
-- Progress text `N/G thẻ` and a compact bar; the bar has `role="progressbar"`, `aria-valuemin=0`,
-  `aria-valuemax=<goal>`, `aria-valuenow=<learned>`. Bar caps at 100% while the text shows the real
-  value (e.g. 25/20).
+- Progress text `N/G thẻ` (real, uncapped) and a compact bar capped at 100% width.
+
+### Progressbar accessibility (valid range + uncapped description)
+Both the Home bar (`#dailyGoalBar`) and the completion bar (`.complete-goalbar`) expose a **valid**
+ARIA range while the visible text/width stay uncapped:
+- `aria-valuemin = 0`, `aria-valuemax = goal`, `aria-valuenow = min(learned, goal)` (capped).
+- `aria-valuetext` = the **real uncapped** progress, e.g. `"25 trên 20 thẻ, đã hoàn thành mục tiêu"`
+  (the ", đã hoàn thành mục tiêu" clause is appended only when `reached`).
+The read model (`learned/goal/percent/reached`) is unchanged and uncapped; `ariaNow`/`ariaText` are
+derived **presentation-only** at render time (via the pure `dailyGoalAriaText(dg)`), never mutating it.
+
+### Reduced motion
+The goal-bar fill width transition is disabled under `@media (prefers-reduced-motion: reduce)` for
+`.dg-bar > span` (one narrow rule; no other animation changed).
 
 ## Completion behavior
 The Phase 21 habit row's existing "Đã học hôm nay" item is made **goal-aware** (shows `N/G`) —

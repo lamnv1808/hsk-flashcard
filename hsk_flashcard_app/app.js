@@ -257,15 +257,19 @@ function dailyGoalModel(){
   const percent=Math.min(100, Math.round(learned/goal*100));   // goal is always >=10
   return { learned, goal, percent, reached: learned>=goal };
 }
+// Presentation-only ARIA text (pure): describes the REAL uncapped progress + completion, while
+// aria-valuenow/max stay a valid capped range. Never mutates the read model.
+function dailyGoalAriaText(dg){ return `${dg.learned} trên ${dg.goal} thẻ`+(dg.reached?", đã hoàn thành mục tiêu":""); }
 // Render-only: reflect the current goal + today's progress on Home. Never writes settings.
 function renderDailyGoal(){
   const dg=dailyGoalModel();
   $("dailyGoalSelect").value=String(dg.goal);
-  $("dailyGoalText").textContent=`${dg.learned}/${dg.goal} thẻ`;
-  $("dailyGoalBarFill").style.width=dg.percent+"%";
+  $("dailyGoalText").textContent=`${dg.learned}/${dg.goal} thẻ`;   // visible: real uncapped value
+  $("dailyGoalBarFill").style.width=dg.percent+"%";                // visual bar capped at 100%
   const bar=$("dailyGoalBar");
   bar.setAttribute("aria-valuemax",String(dg.goal));
-  bar.setAttribute("aria-valuenow",String(dg.learned));
+  bar.setAttribute("aria-valuenow",String(Math.min(dg.learned,dg.goal)));   // capped -> valid ARIA range
+  bar.setAttribute("aria-valuetext",dailyGoalAriaText(dg));                 // uncapped real progress
 }
 
 function updateStreak(){
@@ -452,7 +456,7 @@ function finishSession(){
   if(isLevels && dueRemaining>0) habit+=chItem(dueRemaining,"Còn cần ôn");
   // The existing "Đã học hôm nay" item is made goal-aware (learned/goal), not duplicated.
   habit+=chItem(`${dg.learned}/${dg.goal}`,"Đã học hôm nay")+chItem(streak,"Chuỗi ngày");
-  habit+=`<div class="complete-goalbar dg-bar" role="progressbar" aria-label="Tiến độ mục tiêu hôm nay" aria-valuemin="0" aria-valuemax="${dg.goal}" aria-valuenow="${dg.learned}"><span style="width:${dg.percent}%"></span></div>`;
+  habit+=`<div class="complete-goalbar dg-bar" role="progressbar" aria-label="Tiến độ mục tiêu hôm nay" aria-valuemin="0" aria-valuemax="${dg.goal}" aria-valuenow="${Math.min(dg.learned,dg.goal)}" aria-valuetext="${dailyGoalAriaText(dg)}"><span style="width:${dg.percent}%"></span></div>`;
   if(dg.reached) habit+=`<div class="complete-goal-done">Đã hoàn thành mục tiêu hôm nay.</div>`;
   $("completeHabit").innerHTML=habit;
 
