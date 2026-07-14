@@ -82,10 +82,26 @@ let session = [], selectedLevels = settings.selectedLevels || ["HSK1"];
 const sessionSM = window.HSKUtil.createStudySessionStateMachine();
 let sessionState = sessionSM.createInitialState();
 let snapshots = {};   // in-memory per-session-index undo history for SRS (never persisted)
-// Phase 21: transient origin of the current session, used ONLY to gate the completion-screen
-// UX ("Học tiếp" continues a level-based session with the same levels). Never persisted, never
-// synced, never part of sessionState / the state machine / cloud payloads.
-let studySource = null;   // null | {type:"levels", levels:string[]} | {type:"explicit"}
+// Phase 21/23: transient origin of the current session, used ONLY to gate the completion-screen
+// UX (level "Học tiếp"; targeted "Quay lại <feature>"). Never persisted, never synced, never part
+// of sessionState / the state machine / cloud payloads. Holds no card objects/ids/DOM/callbacks —
+// only a small discriminated shape; `feature` is one of a fixed allowlist.
+let studySource = null;   // null | {type:"levels",levels:string[]} | {type:"targeted",feature:"weak"|"bookmarks"} | {type:"explicit"}
+
+// Phase 23: the only accepted targeted features, their completion labels, and the safe openers they
+// map to (existing insights.js feature views, which re-query live data). Keyed by the allowlisted
+// enum only — no arbitrary DOM ids or callbacks ever come from source data.
+const TARGETED_FEATURES = ["weak", "bookmarks"];
+const TARGETED_LABELS = { weak: "Quay lại Từ cần cải thiện", bookmarks: "Quay lại Từ đã lưu" };
+// Normalize an optional startSession source arg to the discriminated shape. Anything missing /
+// malformed / non-object / array / unknown-feature / arbitrary-string normalizes to explicit.
+function normalizeSource(source){
+  if(source && typeof source==="object" && !Array.isArray(source)){
+    const f=source.feature;
+    if(typeof f==="string" && TARGETED_FEATURES.indexOf(f)>=0) return { type:"targeted", feature:f };
+  }
+  return { type:"explicit" };
+}
 
 const $ = id => document.getElementById(id);
 
@@ -456,19 +472,23 @@ function finishSession(){
   if(dg.reached) habit+=`<div class="complete-goal-done">Đã hoàn thành mục tiêu hôm nay.</div>`;
   $("completeHabit").innerHTML=habit;
 
-  // "Học tiếp N thẻ": only for level-based sessions that still have due cards. N is the size
-  // of the NEXT batch (min of the current session size and the due-remaining count; all due
-  // when size = "Tất cả thẻ đến hạn"). Clicking reuses the normal startStudy(levels) path.
-  const contBtn=$("continueStudyBtn");
+  // Completion actions. Always reset to the safe default first (both extra actions hidden, Home
+  // primary), THEN apply exactly one source-specific gating: level -> Phase 21 "Học tiếp";
+  // targeted -> Phase 23 "Quay lại <feature>"; explicit/null/malformed -> generic Home only.
+  const contBtn=$("continueStudyBtn"), retBtn=$("returnSourceBtn");
+  contBtn.hidden=true; retBtn.hidden=true; $("homeBtn").className="primary-btn";
+  const isTargeted = studySource && studySource.type==="targeted" && TARGETED_LABELS[studySource.feature];
   if(isLevels && dueRemaining>0){
+    // "Học tiếp N thẻ": N = min(session size, due-remaining); all due when size = "Tất cả thẻ đến hạn".
     const sizeSetting=$("sessionSize").value;
     const nextN=sizeSetting==="all" ? dueRemaining : Math.min(parseInt(sizeSetting,10)||dueRemaining, dueRemaining);
     contBtn.textContent=`Học tiếp ${nextN} thẻ`;
     contBtn.hidden=false;
     $("homeBtn").className="secondary-btn";
-  } else {
-    contBtn.hidden=true;
-    $("homeBtn").className="primary-btn";
+  } else if(isTargeted){
+    retBtn.textContent=TARGETED_LABELS[studySource.feature];   // textContent (no innerHTML)
+    retBtn.hidden=false;
+    $("homeBtn").className="secondary-btn";
   }
 }
 
@@ -535,6 +555,17 @@ $("homeBtn").onclick=()=>{stopSpeech();showView("homeView");renderHome()};
 // Phase 21: "Học tiếp" — restart a level-based session with the same selected levels via the
 // normal startStudy path (existing session size, fresh selection, next card front-side).
 $("continueStudyBtn").onclick=()=>{ if(studySource && studySource.type==="levels"){ stopSpeech(); startStudy(studySource.levels); } };
+// Phase 23: "Quay lại <feature>" — re-open the originating targeted feature view (which re-queries
+// live data), via a closed allowlist map keyed by the validated feature enum. No raw view ids, no
+// callbacks from source data, no Study session start, no writes. Malformed/unknown -> safe Home.
+const RETURN_OPENERS={ weak:()=>HSKInsights.showWeak(), bookmarks:()=>HSKInsights.showBookmarks() };
+$("returnSourceBtn").onclick=()=>{
+  const feature = (studySource && studySource.type==="targeted") ? studySource.feature : null;
+  const opener = (feature && window.HSKInsights) ? RETURN_OPENERS[feature] : null;
+  stopSpeech();
+  if(typeof opener==="function") opener();
+  else { showView("homeView"); renderHome(); }   // safe fallback
+};
 $("shuffleBtn").onclick=()=>{session.sort(()=>Math.random()-.5);sessionState=sessionSM.startSession({cardIds:session.map(c=>c.id)});snapshots={};renderCard()};
 
 // Click the Chinese word / example to hear it (without flipping the card, and not after a drag).
@@ -613,12 +644,13 @@ window.HSK_APP = {
   // Start a normal Study Mode session from an explicit, de-duplicated list of card IDs
   // (used by "Ôn các từ này" / "Học các từ đã lưu"). Reuses the existing renderer, audio,
   // grading and SRS exactly.
-  startSession(ids){
+  startSession(ids, source){
     // Read-only construction via StudySessionEngine (Phase 16; delegates to Phase 5:
-    // resolve ids in requested order, dedup, skip missing).
+    // resolve ids in requested order, dedup, skip missing). `source` (optional) only tags the
+    // transient completion-UX origin; it never affects card selection/order/SRS.
     const list=studyEngine.buildExplicitSession({ cardIds: ids }).cards;
     if(!list.length) return false;
-    studySource={ type:"explicit" };   // Phase 21: no same-level "Học tiếp" for explicit sessions
+    studySource=normalizeSource(source);   // Phase 23: targeted (weak/bookmarks) or explicit fallback
     session=list; sessionState=sessionSM.startSession({ cardIds: list.map(c=>c.id) }); snapshots={};
     // Deactivate any non-core view (Weak Words / Bookmarks / etc.) before entering
     // Study Mode, since showView() only manages home/study/complete.
