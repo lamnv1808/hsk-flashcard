@@ -308,11 +308,12 @@ function startStudy(levels){
 
 // Vocab pinyin (column C): shown on the FRONT by default; when the setting is off it
 // moves to the back (above the meaning). Never both sides; example pinyin is untouched.
+// The front-pinyin setting controls ONLY the FRONT vocab pinyin. The BACK vocabulary block
+// (Hanzi + pinyin) is ALWAYS shown after flipping — independent of this setting (Hotfix 24.1).
 function applyPinyinDisplay(){
   const showFP = settingsRepo.getFrontPinyinEnabled();   // undefined => true (existing users unchanged)
-  $("pinyin").style.display = showFP ? "" : "none";
-  $("backWordBlock").style.display = showFP ? "none" : "";
-  $("flashcard").classList.toggle("no-front-pinyin", !showFP);  // lets CSS fit the denser back on mobile
+  $("pinyin").style.display = showFP ? "" : "none";      // front vocab pinyin follows the setting
+  $("backWordBlock").style.display = "";                 // back vocab (word + pinyin) is always visible
 }
 
 function renderCard(){
@@ -346,6 +347,8 @@ function renderCard(){
   $("levelBadge").textContent=m.deckId; $("word").textContent=m.front.primary; $("pinyin").textContent=m.front.pronunciation;
   $("meaning").textContent=m.back.definition; $("example").textContent=m.back.example; $("examplePinyin").textContent=m.back.examplePronunciation; $("translation").textContent=m.back.translation;
   // Front vocab pinyin (column C) shows on the front by default; when disabled it moves to the back.
+  // Back vocab block (Hotfix 24.1): the Hanzi + pinyin are always shown on the back, from the
+  // Phase 17 read model; the front-pinyin setting only affects the FRONT pinyin above.
   $("backWord").textContent=m.back.primary; $("backPinyin").textContent=m.back.pronunciation;
   applyPinyinDisplay();
   if(window.HSKMeta) HSKMeta.syncCard();   // bookmark state + hide note zone (front)
@@ -569,14 +572,14 @@ $("returnSourceBtn").onclick=()=>{
 $("shuffleBtn").onclick=()=>{session.sort(()=>Math.random()-.5);sessionState=sessionSM.startSession({cardIds:session.map(c=>c.id)});snapshots={};renderCard()};
 
 // Click the Chinese word / example to hear it (without flipping the card, and not after a drag).
-// Shared word-audio binding for the two places the vocab word can be shown (depending on
-// the front-pinyin setting): the FRONT word (#word) and the BACK word block (#backWordBlock
-// = hanzi + pinyin line, shown on the back only when front pinyin is off). Reuses speakWord
-// (reads the zh-CN word only — no pinyin/Vietnamese); stopPropagation so it reads instead of
-// flipping the card; suppressClick guards against reading after a drag / double playback.
+// Shared word-audio binding for the two places the vocab word is shown: the FRONT word (#word)
+// and the BACK word block (#backWordBlock = hanzi + pinyin line, always shown on the back since
+// Hotfix 24.1). Reuses speakWord (reads the zh-CN word only — no pinyin/Vietnamese); stopPropagation
+// so it reads instead of flipping the card; suppressClick guards against reading after a drag /
+// double playback. Exactly one listener per element — no duplication.
 function bindWordAudio(el){ if(el) el.addEventListener("click",e=>{e.stopPropagation(); if(suppressClick){suppressClick=false;return;} speakWord();}); }
 bindWordAudio($("word"));            // front face — always shows the word
-bindWordAudio($("backWordBlock"));   // back face — shows word+pinyin when front pinyin is off
+bindWordAudio($("backWordBlock"));   // back face — always shows the word + pinyin (clickable target)
 $("example").addEventListener("click",e=>{e.stopPropagation(); if(suppressClick){suppressClick=false;return;} speakExample();});
 
 $("speakWordBtn").onclick=e=>{e.stopPropagation();speakWord()};
