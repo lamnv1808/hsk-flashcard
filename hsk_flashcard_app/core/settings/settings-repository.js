@@ -35,7 +35,9 @@
     autoReadExample: false,              // !!settings.autoReadExample
     showFrontPinyin: true,               // settings.showFrontPinyin !== false
     dark: false,                         // !!settings.dark
-    streak: 0                            // settings.streak || 0
+    streak: 0,                           // settings.streak || 0
+    dailyGoal: 20,                       // Phase 22A: fallback when absent/invalid
+    dailyGoals: [10, 20, 30, 50]         // Phase 22A: the only accepted goal values
   };
 
   function assign(base, over) {
@@ -113,6 +115,15 @@
 
       // matches: settings.streak || 0
       getStreak: function () { return src().streak || cfg.streak; },
+
+      // Phase 22A daily-goal contract: return a number that is one of the allowed
+      // goals (10/20/30/50). Accepts a valid numeric string from settings transport
+      // (Number() coercion); anything missing/null/non-numeric/unsupported -> 20.
+      // Read-only: never mutates the source, writes storage, or marks dirty.
+      getDailyGoal: function () {
+        var v = Number(src().dailyGoal);
+        return cfg.dailyGoals.indexOf(v) >= 0 ? v : cfg.dailyGoal;
+      },
 
       // matches: !!settings.dark
       getDarkEnabled: function () { return !!src().dark; }

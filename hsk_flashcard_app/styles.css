@@ -202,6 +202,24 @@ body.auth-locked{overflow:hidden}
   body.studying .flashcard.no-front-pinyin .example{font-size:26px}
 }
 
+/* ---------- Phase 22A: daily goal (additive, display-only) ---------- */
+.daily-goal-panel{display:grid;grid-template-columns:200px 1fr;gap:14px 22px;align-items:center;background:var(--panel);border:1px solid var(--line);padding:18px;border-radius:22px}
+.dg-progress{min-width:0}
+.dg-progress-head{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:8px}
+.dg-label{font-size:12px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+.dg-text{font-size:16px}
+.dg-bar{height:10px;background:var(--line);border-radius:99px;overflow:hidden}
+.dg-bar>span{display:block;height:100%;background:var(--accent);border-radius:99px;transition:width .25s}
+@media(max-width:720px){.daily-goal-panel{grid-template-columns:1fr}}
+@media (prefers-reduced-motion: reduce) {
+  .dg-bar > span {
+    transition: none;
+  }
+}
+/* completion goal progress + acknowledgment (full-width within the Phase 21 habit row) */
+.complete-goalbar{flex-basis:100%;margin-top:4px}
+.complete-goal-done{flex-basis:100%;text-align:center;color:#16a34a;font-weight:800;font-size:14px;margin-top:2px}
+
 /* ============ Test Mode (additive; independent of Study Mode) ============ */
 .head-spacer{width:44px;display:inline-block}
 .test-cta{width:100%;margin-bottom:18px}

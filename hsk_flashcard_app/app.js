@@ -237,6 +237,39 @@ function renderHome(){
   $("retentionStat").textContent=summary.retentionText;
   $("streakStat").textContent=settingsRepo.getStreak();
   $("dueCount").textContent=summary.dueCount;
+  renderDailyGoal();
+}
+
+// Phase 22A daily goal (additive, display-only). "Today learned" = unique cards graded during
+// the current LOCAL day (existing semantics, unchanged). Normally read through HSKMeta (the
+// locked source); metadata.js loads AFTER app.js, so before it is ready we read the SAME
+// underlying data (settings.dailyCounts keyed by the local day) so the first Home paint isn't
+// wrongly 0 — identical value, identical day-key, no semantic change.
+function dailyLearnedToday(){
+  if(window.HSKMeta) return HSKMeta.dailyCounts()[HSKMeta.localDay()] || 0;
+  const dc=(settings && settings.dailyCounts) || {};
+  return dc[window.HSKUtil.date.localDay()] || 0;
+}
+// Pure read model shared by Home and the completion screen (no writes / storage / mutation).
+function dailyGoalModel(){
+  const learned=dailyLearnedToday();
+  const goal=settingsRepo.getDailyGoal();
+  const percent=Math.min(100, Math.round(learned/goal*100));   // goal is always >=10
+  return { learned, goal, percent, reached: learned>=goal };
+}
+// Presentation-only ARIA text (pure): describes the REAL uncapped progress + completion, while
+// aria-valuenow/max stay a valid capped range. Never mutates the read model.
+function dailyGoalAriaText(dg){ return `${dg.learned} trên ${dg.goal} thẻ`+(dg.reached?", đã hoàn thành mục tiêu":""); }
+// Render-only: reflect the current goal + today's progress on Home. Never writes settings.
+function renderDailyGoal(){
+  const dg=dailyGoalModel();
+  $("dailyGoalSelect").value=String(dg.goal);
+  $("dailyGoalText").textContent=`${dg.learned}/${dg.goal} thẻ`;   // visible: real uncapped value
+  $("dailyGoalBarFill").style.width=dg.percent+"%";                // visual bar capped at 100%
+  const bar=$("dailyGoalBar");
+  bar.setAttribute("aria-valuemax",String(dg.goal));
+  bar.setAttribute("aria-valuenow",String(Math.min(dg.learned,dg.goal)));   // capped -> valid ARIA range
+  bar.setAttribute("aria-valuetext",dailyGoalAriaText(dg));                 // uncapped real progress
 }
 
 function updateStreak(){
@@ -416,12 +449,15 @@ function finishSession(){
   // selected levels, via the existing dueCards() read — no new query module.
   const isLevels=studySource && studySource.type==="levels";
   const dueRemaining=isLevels ? dueCards(studySource.levels).length : 0;
-  const todayLearned=(window.HSKMeta && HSKMeta.dailyCounts()[HSKMeta.localDay()]) || 0;
+  const dg=dailyGoalModel();   // Phase 22A: same today-count source, now goal-aware (no duplicate item)
   const streak=settingsRepo.getStreak();
   let habit="";
   if(isLevels && dueRemaining===0) habit+=`<div class="complete-allclear">Hôm nay tạm ổn rồi 🎉</div>`;
   if(isLevels && dueRemaining>0) habit+=chItem(dueRemaining,"Còn cần ôn");
-  habit+=chItem(todayLearned,"Đã học hôm nay")+chItem(streak,"Chuỗi ngày");
+  // The existing "Đã học hôm nay" item is made goal-aware (learned/goal), not duplicated.
+  habit+=chItem(`${dg.learned}/${dg.goal}`,"Đã học hôm nay")+chItem(streak,"Chuỗi ngày");
+  habit+=`<div class="complete-goalbar dg-bar" role="progressbar" aria-label="Tiến độ mục tiêu hôm nay" aria-valuemin="0" aria-valuemax="${dg.goal}" aria-valuenow="${Math.min(dg.learned,dg.goal)}" aria-valuetext="${dailyGoalAriaText(dg)}"><span style="width:${dg.percent}%"></span></div>`;
+  if(dg.reached) habit+=`<div class="complete-goal-done">Đã hoàn thành mục tiêu hôm nay.</div>`;
   $("completeHabit").innerHTML=habit;
 
   // "Học tiếp N thẻ": only for level-based sessions that still have due cards. N is the size
@@ -491,6 +527,13 @@ $("sheetBackdrop").onclick=()=>toggleLogic(false);
 $("logicClose").onclick=()=>toggleLogic(false);
 $("startMixedBtn").onclick=()=>startStudy(selectedLevels);
 $("sessionSize").onchange=()=>{settings.sessionSize=$("sessionSize").value;saveSettings();};
+// Phase 22A: pick the daily goal. Accept only 10/20/30/50; persist once; re-render the goal UI
+// (rendering itself never writes). The <select> only offers the allowed values.
+$("dailyGoalSelect").onchange=()=>{
+  const v=parseInt($("dailyGoalSelect").value,10);
+  if([10,20,30,50].indexOf(v)>=0){ settings.dailyGoal=v; saveSettings(); }
+  renderDailyGoal();
+};
 $("backBtn").onclick=exitStudy;
 $("homeBtn").onclick=()=>{stopSpeech();showView("homeView");renderHome()};
 // Phase 21: "Học tiếp" — restart a level-based session with the same selected levels via the
