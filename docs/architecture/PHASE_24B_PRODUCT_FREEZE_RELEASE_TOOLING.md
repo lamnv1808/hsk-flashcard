@@ -13,24 +13,33 @@ FlashEdu approved and publicly available on **both** the Apple App Store and Goo
 permitted native degradation, and Milestone 2 deferrals.
 
 ## Release helper — `scripts/release_check.py`
-`python scripts/release_check.py` — **read-only**. Resolves the repo root from its own path (spaces
-supported), runs only read-only git (`rev-parse`, `status`), and enforces these gates:
+`python scripts/release_check.py` — **read-only, fail-closed**. Resolves the repo root from its own
+path (spaces supported), runs only read-only git (`rev-parse`, `status`), and enforces these gates:
 1. inside a git work tree
-2. current branch is `main`
-3. working tree completely clean (staged + unstaged + untracked)
-4. local `main` == local `origin/main`
-5. service-worker cache version present (reported exactly)
-6. required web runtime assets exist
-7. full regression (`tests/run_regression.py`, run with the current interpreter) passes
+2. all safety-critical git reads succeed **and** have the expected shape (branch is a non-blank token;
+   HEAD/main/origin-main are 40-hex SHAs) — a failed `git status` (nonzero exit / empty stdout) is
+   **never** treated as a clean tree
+3. current branch is `main`
+4. working tree completely clean (staged + unstaged + untracked)
+5. local `main` == local `origin/main`
+6. service-worker cache version present (reported exactly)
+7. the **full `sw.js` precache inventory** (its `ASSETS` array) is parsed read-only (no JS execution)
+   and every listed path verified to exist — fails closed if the array is missing/unparseable; the
+   count of verified assets is reported (no second drifting asset list is kept in Python)
+8. full regression (`tests/run_regression.py`, run with the current interpreter) passes
+9. **post-regression revalidation:** branch/HEAD/main/origin-main and cleanliness are snapshotted
+   before regression and re-checked after — since regression is executable code, any mutation
+   (tracked edit, new untracked file, staged change, moved HEAD/branch/ref) fails the run
 
 It **never** fetches/pulls/merges/rebases/resets/checkouts/tags/pushes/deploys, never reads or mutates
-user progress/settings/auth storage, never contacts Supabase. It fails fast (skips regression) when a
-pre-condition gate fails. There is **no** flag to bypass the dirty-tree, branch, sync, or regression
-gates.
+user progress/settings/auth storage, never contacts Supabase, and never auto-cleans/reverts anything.
+It fails fast (skips regression) when a pre-condition gate fails. There is **no** flag to bypass the
+dirty-tree, branch, sync, precache, or regression gates. CLI output is ASCII-only (docs stay UTF-8).
 
-**Exit-code / failure model:** exit `0` **only** when every gate passes; non-zero on any failed gate.
-On success it reports the exact HEAD commit + SW cache version and prints (but never executes) the
-owner's manual Render deploy steps. On failure it prints the failed gates and **no** deploy steps.
+**Exit-code / failure model:** exit `0` **only** when every gate passes (including post-regression
+revalidation); non-zero on any failed gate. On success it reports the exact HEAD commit + SW cache
+version + verified precache-asset count and prints (but never executes) the owner's manual Render
+deploy steps. On failure it prints the failed gates and **no** deploy steps.
 
 ## Manual Render workflow (printed by the helper on success; owner performs it)
 1. Confirm the reported commit. 2. Render → the FlashEdu Static Site → Manual Deploy → Deploy latest
@@ -38,13 +47,18 @@ commit. 3. Wait until Live. 4. Hard-refresh / fresh browser context so SW `v35` 
 [PRODUCTION_SMOKE_CHECKLIST.md](../release/PRODUCTION_SMOKE_CHECKLIST.md).
 
 ## Tests — `tests/tooling/test_release_check.py` (registered → 35/35)
-Isolated temporary git repos + a **stubbed** `tests/run_regression.py` (no browser/network): clean
-`main == origin/main` + passing regression → exit 0 with manual steps; dirty tracked file, staged
-change, untracked file, wrong branch, detached HEAD, and diverged `main`/`origin/main` each → non-zero
-with no manual steps; regression failure propagates non-zero; success returns zero; repo paths with
-spaces work; the reported commit + SW version are exact; the helper leaves the temp repo unmodified
-(HEAD + refs unchanged); static scan proves it makes no mutating git calls, imports no network
-libraries, spawns only `git`/the regression runner, and has no bypass flags.
+Isolated temporary git repos + a **stubbed** `tests/run_regression.py` (no browser/network) whose
+`sw.js` carries a real `ASSETS` array: clean `main == origin/main` + passing regression → exit 0 with
+manual steps + exact commit/SW/precache-count + post-regression gate PASS; dirty/staged/untracked/
+wrong-branch/detached-HEAD/diverged each → non-zero, no manual steps; regression failure → non-zero.
+**Finding 1:** a passing regression that modifies a tracked file / creates an untracked file / stages
+a file / moves HEAD → the post-regression revalidation fails (non-zero, no steps). **Finding 2:**
+missing a listed precache asset, and a malformed or missing `ASSETS` array, each fail closed.
+**Finding 3:** a non-git directory and an empty repo (no HEAD) fail closed; a source scan confirms the
+clean gate requires `clean is True` and that `git status` is return-code-gated. Plus: space-containing
+paths work; the helper leaves the temp repo unmodified (HEAD + refs unchanged); ASCII-only output; and
+a static scan proves no mutating git calls, no network imports, only `git`/the regression runner are
+spawned, and no bypass flags.
 
 ## Security & privacy prerequisites; owner decisions; native entry criteria
 See [STORE_RELEASE_DECISIONS.md](../release/STORE_RELEASE_DECISIONS.md) (all `REQUIRED`, no fake
