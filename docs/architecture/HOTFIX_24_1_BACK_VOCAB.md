@@ -61,6 +61,20 @@ listener); navigation (next/prev front-side, back word updates, no stale prior w
 rating buttons in-viewport). Full regression **34/34 PASS** (incl. p0 answer-leak, SRS goldens, audio,
 Study flow; zero console/page errors).
 
+### Review follow-up — real pointer/hit-test coverage
+Strengthened `back_vocab_visibility.py` (no existing assertion removed/weakened): after the 0.55s
+flip animation settles (so the back is the active hit-tested face), for **both** front-pinyin states
+at **390×844 and 1366×768**, it resolves `document.elementFromPoint()` at the visible centers of
+`#backWord` and `#backPinyin`, asserts the hit node is inside `#backWordBlock`, then issues an
+**actual Playwright mouse click** at those screen coordinates (not DOM `.click()`) and asserts exactly
+one utterance equal to the current Chinese word, `lang === "zh-CN"`, and the card stays flipped.
+Verified `elementFromPoint` results: `#backWord`→`backWord`, `#backPinyin`→`backPinyin` in all four
+combinations; each real click → one `zh-CN` utterance of the word (the pinyin line reads the word, not
+"ài"), card remains flipped. The stale `applyPinyinDisplay()` comment ("moves to the back… never both
+sides") was corrected to state the final contract (front word always; front pinyin follows the
+setting; back always shows word + pinyin; example pinyin unchanged) — comment-only, no logic change.
+SW unchanged at **v35**.
+
 ## Service Worker
 Cache **v34 → v35** (runtime assets changed). Asset list, install/activate/fetch, and cache strategy
 unchanged (no new runtime asset added).

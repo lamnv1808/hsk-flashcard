@@ -306,10 +306,12 @@ function startStudy(levels){
   snapshots={}; showView("studyView"); renderCard();
 }
 
-// Vocab pinyin (column C): shown on the FRONT by default; when the setting is off it
-// moves to the back (above the meaning). Never both sides; example pinyin is untouched.
-// The front-pinyin setting controls ONLY the FRONT vocab pinyin. The BACK vocabulary block
-// (Hanzi + pinyin) is ALWAYS shown after flipping — independent of this setting (Hotfix 24.1).
+// Vocab pinyin display contract (Hotfix 24.1):
+//   - the Chinese word is ALWAYS visible on the front;
+//   - front vocab pinyin follows the `showFrontPinyin` setting (on => shown, off => hidden);
+//   - after flipping, the back ALWAYS shows the Chinese word AND its pinyin, independent of the
+//     setting (the back word block is not gated by it);
+//   - example pinyin is unchanged.
 function applyPinyinDisplay(){
   const showFP = settingsRepo.getFrontPinyinEnabled();   // undefined => true (existing users unchanged)
   $("pinyin").style.display = showFP ? "" : "none";      // front vocab pinyin follows the setting

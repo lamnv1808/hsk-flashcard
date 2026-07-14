@@ -115,6 +115,60 @@ with sync_playwright() as p:
     pg.wait_for_timeout(60)
     check('audio: drag then click -> no playback (suppressClick)', len(utter(pg)) == 0)
 
+    # ============ Real pointer/hit-test coverage (Finding 1) ============
+    # DOM .click() can fire a listener on a visually-covered node. Here we wait out the 0.55s flip
+    # animation so the back face is the active hit-tested face, verify elementFromPoint at the visible
+    # center resolves inside #backWordBlock, then dispatch an ACTUAL Playwright mouse click at those
+    # screen coordinates. Both front-pinyin states, mobile + desktop.
+    def pointer_hit(w, h, fp_on):
+        cx = b.new_context(viewport={'width': w, 'height': h})
+        cx.route('**/supabase-config.js', lambda r: r.fulfill(status=200, content_type='application/javascript', body=EMPTY))
+        pp = cx.new_page(); pe = []
+        pp.on('pageerror', lambda e: pe.append('PAGEERR:' + str(e)))
+        pp.on('console', lambda m: pe.append('CON:' + m.text) if m.type == 'error' else None)
+        pp.goto(URL); pp.wait_for_timeout(250); pp.evaluate('()=>localStorage.clear()'); pp.reload(); pp.wait_for_timeout(250)
+        pp.evaluate("(on)=>{ progress={}; save(); document.getElementById('sessionSize').value='10'; settings.showFrontPinyin=on; startStudy(['HSK1']); }", fp_on)
+        pp.wait_for_timeout(120)
+        cw = pp.evaluate("()=>session[sessionState.currentIndex].word")
+        cpy = pp.evaluate("()=>session[sessionState.currentIndex].pinyin")
+        cmn = pp.evaluate("()=>session[sessionState.currentIndex].meaning")
+        pp.evaluate("()=>{ if(!sessionState.flipped) flipCard(); }")
+        pp.wait_for_timeout(700)   # let the 0.55s flip animation finish -> back is the hit-tested face
+        pp.evaluate(SPY)
+        res = {'errs': pe, 'targets': {}}
+        for tid in ['backWord', 'backPinyin']:
+            info = pp.evaluate("""(id)=>{ const el=document.getElementById(id); const r=el.getBoundingClientRect();
+                const x=Math.round(r.left+r.width/2), y=Math.round(r.top+r.height/2);
+                const hit=document.elementFromPoint(x,y); const block=document.getElementById('backWordBlock');
+                return { x, y, visible: r.width>0&&r.height>0,
+                         hitId: hit?hit.id:null, hitClass: hit?String(hit.className||''):null,
+                         inBlock: hit ? (hit===block || block.contains(hit)) : false }; }""", tid)
+            pp.evaluate("()=>{window.__utter=[];}")
+            pp.mouse.click(info['x'], info['y'])   # ACTUAL pointer click (not DOM .click())
+            pp.wait_for_timeout(90)
+            res['targets'][tid] = {
+                'info': info, 'utter': pp.evaluate("()=>window.__utter.slice()"),
+                'flipped': pp.evaluate("()=>document.getElementById('flashcard').classList.contains('flipped')"),
+                'word': cw, 'pinyin': cpy, 'meaning': cmn }
+        cx.close()
+        return res
+
+    for (w, h) in [(390, 844), (1366, 768)]:
+        for fp_on in (True, False):
+            r = pointer_hit(w, h, fp_on)
+            tag = '%dx%d/fp=%s' % (w, h, 'on' if fp_on else 'off')
+            for tid in ['backWord', 'backPinyin']:
+                t = r['targets'][tid]; info = t['info']
+                check('pointer %s %s: rect visible' % (tag, tid), info['visible'] == True)
+                check('pointer %s %s: elementFromPoint inside #backWordBlock (got id=%s cls=%s)' % (tag, tid, info['hitId'], info['hitClass']),
+                      info['inBlock'] == True and (info['hitId'] in ('backWord', 'backPinyin', 'backWordBlock') or 'back-word' in (info['hitClass'] or '') or 'back-pinyin' in (info['hitClass'] or '')))
+                check('pointer %s %s: exactly one utterance' % (tag, tid), len(t['utter']) == 1)
+                check('pointer %s %s: utterance == current Chinese word' % (tag, tid), bool(t['utter']) and t['utter'][0]['text'] == t['word'])
+                check('pointer %s %s: lang zh-CN' % (tag, tid), bool(t['utter']) and t['utter'][0]['lang'] == 'zh-CN')
+                check('pointer %s %s: not pinyin/Vietnamese' % (tag, tid), bool(t['utter']) and t['utter'][0]['text'] != t['pinyin'] and t['utter'][0]['text'] != t['meaning'])
+                check('pointer %s %s: card stays flipped' % (tag, tid), t['flipped'] == True)
+            check('pointer %s: no page/console errors' % tag, len(r['errs']) == 0)
+
     # ============ Navigation: next/prev front-side, back word updates, no stale ============
     start(pg); set_front_pinyin(pg, True)
     w0 = pg.evaluate("()=>session[0].word"); w1 = pg.evaluate("()=>session[1].word")
