@@ -74,6 +74,7 @@ GROUPS = {
         "tests/regression/completion_loop.py",
         "tests/regression/streak_semantics.py",
         "tests/regression/targeted_continuity.py",
+        "tests/regression/back_vocab_visibility.py",
     ],
     "Features (Weak/Smart/Bookmarks/Notes)": [
         "tests/regression/features_test.py",
