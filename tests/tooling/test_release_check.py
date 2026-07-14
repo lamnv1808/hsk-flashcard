@@ -185,6 +185,9 @@ def main():
             ("url_entry", "const ASSETS=['index.html','https://evil.example/x.js'];", None, "url entry"),
             ("proto_rel", "const ASSETS=['index.html','//evil.example/x.js'];", None, "protocol-relative entry"),
             ("missing_bracket", "const ASSETS=['index.html', 'app.js'", None, "missing closing bracket"),
+            ("dup_exact", "const ASSETS=['index.html','index.html'];", None, "exact duplicate"),
+            ("dup_relalias", "const ASSETS=['index.html','./index.html'];", None, "relative-alias duplicate"),
+            ("dup_rootalias", "const ASSETS=['./','.'];", None, "root-alias (canonical) duplicate"),
         ]
         for name, line, ext, label in fail_cases:
             repo, (code, out) = sw_case(name, line, ext)
@@ -196,6 +199,11 @@ def main():
         # containment reason surfaced for a traversal case (rejected as unsafe, not merely missing)
         _, (_, tout) = sw_case("bslash_reason", "const ASSETS=['index.html','..\\\\outside.txt'];", "outside.txt")
         check("backslash traversal rejected as unsafe (containment, not missing)", "traversal" in tout)
+        # duplicate reason clearly surfaced (raw dup and relative alias)
+        _, (_, dout1) = sw_case("dup_reason1", "const ASSETS=['index.html','index.html'];")
+        check("exact-duplicate reason visible", "duplicate" in dout1)
+        _, (_, dout2) = sw_case("dup_reason2", "const ASSETS=['index.html','./index.html'];")
+        check("relative-alias duplicate reason visible", "duplicate" in dout2)
         # current formatting with a trailing comma still passes
         _, (code, out) = sw_case("trailing_comma",
                                  "const ASSETS=['./','index.html','app.js','styles.css','data.js','sw.js','core/platform/platform.js',];")

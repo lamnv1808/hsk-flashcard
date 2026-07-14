@@ -30,8 +30,12 @@ path (spaces supported), runs only read-only git (`rev-parse`, `status`), and en
    `hsk_flashcard_app` (except the intentional `./` app-root entry): URLs/protocol-relative, absolute
    POSIX paths, Windows drive-absolute and UNC paths, and parent traversal via **both** `/` and `\\`
    are rejected (with a real-path/`commonpath` containment check as defense in depth — a traversal is
-   rejected even when the external target exists). Every remaining path must exist; the count of
-   verified assets is reported (the real inventory is **36**; no second asset list is kept in Python)
+   rejected even when the external target exists). Every remaining path must exist **and resolve to a
+   unique canonical target** (`normcase(realpath(...))`): raw duplicates (`'index.html','index.html'`),
+   relative aliases (`'index.html'` vs `'./index.html'`), root aliases (`'./'` vs `'.'`), and case/
+   symlink aliases that collide all **fail closed** (entries are never silently de-duplicated). The
+   count of verified assets is reported (the real inventory is **36 distinct** canonical targets; no
+   second asset list is kept in Python)
 8. full regression (`tests/run_regression.py`, run with the current interpreter) passes
 9. **post-regression revalidation:** branch/HEAD/main/origin-main and cleanliness are snapshotted
    before regression and re-checked after — since regression is executable code, any mutation

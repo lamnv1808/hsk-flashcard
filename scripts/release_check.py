@@ -146,20 +146,31 @@ def sw_inventory():
     if not all(isinstance(a, str) and a != "" for a in items):
         return (swver, False, "sw.js ASSETS contains a non-string/empty entry (fail-closed)", 0)
 
+    # Every entry must resolve to a UNIQUE canonical target. Identity = normcase(realpath(...))
+    # so raw duplicates, relative aliases ('index.html' vs './index.html'), root aliases ('./' vs
+    # '.'), case aliases on a case-insensitive filesystem, and symlink aliases all collide and fail
+    # closed. We never silently de-duplicate, and the reported count stays the raw entry count.
     problems = []
+    seen = {}   # canonical target -> the first raw entry that produced it
     for a in items:
         if a in ("./", "."):
             if not os.path.isdir(APP):
-                problems.append(a + " (app root missing)")
-            continue
-        target, reason = asset_target(a)
-        if reason:
-            problems.append(a + " (" + reason + ")")
-        elif not os.path.isfile(target):
-            problems.append(a + " (missing)")
+                problems.append(a + " (app root missing)"); continue
+            canon = os.path.normcase(os.path.realpath(APP))
+        else:
+            target, reason = asset_target(a)
+            if reason:
+                problems.append(a + " (" + reason + ")"); continue
+            if not os.path.isfile(target):
+                problems.append(a + " (missing)"); continue
+            canon = os.path.normcase(os.path.realpath(target))
+        if canon in seen:
+            problems.append(a + " (duplicate of '" + seen[canon] + "')")
+        else:
+            seen[canon] = a
 
     if problems:
-        return (swver, False, "invalid/missing precache asset(s): " + ", ".join(problems), len(items))
+        return (swver, False, "invalid/missing/duplicate precache asset(s): " + ", ".join(problems), len(items))
     return (swver, True, str(len(items)) + " precache assets verified", len(items))
 
 
