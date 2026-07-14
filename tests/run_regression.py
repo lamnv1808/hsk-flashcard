@@ -92,6 +92,9 @@ GROUPS = {
     "Native readiness (Phase 24A)": [
         "tests/regression/platform_adapter.py",
     ],
+    "Release tooling (Phase 24B)": [
+        "tests/tooling/test_release_check.py",
+    ],
 }
 
 def free_port():
