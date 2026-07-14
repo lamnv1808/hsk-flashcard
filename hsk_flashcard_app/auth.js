@@ -319,28 +319,132 @@
     location.reload();
   }
 
+  /* ---- Phase 24A: accessible in-DOM PIN modal (replaces prompt() for PIN flows) ----
+   * `prompt()` is unreliable and poor UX inside a WebView; this modal collects the PIN(s)
+   * with real password inputs. It preserves the exact Edge Function calls, payloads,
+   * validation, error meaning and success/reload behavior. PIN values are never logged,
+   * never inserted via innerHTML, never placed in storage/URL/dataset, and are cleared on
+   * every close. onSubmit(values) returns an error STRING to keep the modal open (no request
+   * made), or a falsy value on success (modal closes). */
+  function openPinModal(opts) {
+    // Explicit, stable return-focus target: the account control that spawns these flows. The
+    // profile menu has already hidden itself (blurring its item to <body>) by the time we open,
+    // so document.activeElement is NOT a reliable trigger — resolve #profileBtn at close time.
+    function returnFocusTarget() { var b = document.getElementById("profileBtn"); return (b && b.isConnected) ? b : null; }
+    var submitting = false;   // modal-local in-flight guard (Finding 1): at most one onSubmit at a time
+    var back = document.createElement("div");
+    back.className = "auth-gate visible pin-modal-gate";
+    var card = el("div", { "class": "auth-card pin-modal", "role": "dialog", "aria-modal": "true", "aria-labelledby": "pinModalTitle" });
+
+    var h = el("h2", { id: "pinModalTitle" }); h.textContent = opts.title; h.style.margin = "0 0 6px";
+    card.appendChild(h);
+    if (opts.warning) { var w = el("p", { "class": "muted" }); w.textContent = opts.warning; w.style.margin = "0 0 12px"; card.appendChild(w); }
+
+    var inputs = {};
+    opts.fields.forEach(function (f) {
+      var lab = el("label", { "class": "auth-label", "for": "pin_" + f.key }); lab.textContent = f.label;
+      var inp = el("input", {
+        "class": "auth-input", id: "pin_" + f.key, type: "password",
+        inputmode: "numeric", autocomplete: "off", maxlength: "4",
+        "aria-describedby": "pinModalMsg"
+      });
+      card.appendChild(lab); card.appendChild(inp);
+      inputs[f.key] = inp;
+    });
+
+    var msg = el("p", { id: "pinModalMsg", "class": "auth-msg", role: "alert", "aria-live": "assertive" });
+    card.appendChild(msg);
+
+    var actions = el("div", { "class": "pin-modal-actions" });
+    var cancelBtn = el("button", { type: "button", "class": "secondary-btn" }); cancelBtn.textContent = "Hủy";
+    var submitBtn = el("button", { type: "button", "class": opts.danger ? "primary-btn pin-danger" : "primary-btn" });
+    submitBtn.textContent = opts.submitLabel;
+    actions.appendChild(cancelBtn); actions.appendChild(submitBtn);
+    card.appendChild(actions);
+    back.appendChild(card);
+
+    function clearInputs() { opts.fields.forEach(function (f) { inputs[f.key].value = ""; }); }
+    function close() {
+      clearInputs();                                   // never leave PIN values in the DOM
+      document.removeEventListener("keydown", onKey, true);
+      document.body.classList.remove("auth-locked");
+      if (back.parentNode) back.parentNode.removeChild(back);
+      var rt = returnFocusTarget();                    // restore focus to #profileBtn (safe fallback: none)
+      if (rt && typeof rt.focus === "function") rt.focus();
+    }
+    function focusables() { return [].slice.call(card.querySelectorAll("input,button")); }
+    function onKey(e) {
+      // While a submission is in flight, Escape must not close/cancel (no second action, no
+      // inconsistent state); wait for the request to resolve.
+      if (e.key === "Escape") { if (submitting) { e.preventDefault(); return; } e.preventDefault(); close(); return; }
+      if (e.key === "Tab") {                                             // trap focus in the dialog
+        var f = focusables(); if (!f.length) return;
+        var first = f[0], last = f[f.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
+    }
+    async function submit() {
+      if (submitting) return;               // ignore extra clicks / Enter presses while pending
+      submitting = true;
+      msg.textContent = "";
+      var values = {}; opts.fields.forEach(function (f) { values[f.key] = inputs[f.key].value; });
+      submitBtn.disabled = true; cancelBtn.disabled = true;
+      var err;
+      try { err = await opts.onSubmit(values); }
+      catch (e) { err = errorText(e); }
+      if (err) {                            // validation/server error -> reset to a retryable state
+        msg.textContent = err;
+        submitBtn.disabled = false; cancelBtn.disabled = false;
+        submitting = false;
+      } else {
+        close();                            // success -> close (onSubmit already ran its side effect)
+      }
+    }
+    cancelBtn.onclick = close;
+    submitBtn.onclick = submit;
+    opts.fields.forEach(function (f) {
+      inputs[f.key].addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); submit(); } });
+    });
+
+    document.body.classList.add("auth-locked");         // block background interaction
+    document.addEventListener("keydown", onKey, true);
+    document.body.appendChild(back);
+    inputs[opts.fields[0].key].focus();                 // intentional initial focus
+  }
+
   function promptChangePin() {
-    var oldPin = prompt("Nhập mã PIN hiện tại (4 số):");
-    if (oldPin == null) return;
-    if (!validPin(oldPin)) return alert("Mã PIN phải gồm 4 chữ số.");
-    var newPin = prompt("Nhập mã PIN mới (4 số):");
-    if (newPin == null) return;
-    if (!validPin(newPin)) return alert("Mã PIN mới phải gồm 4 chữ số.");
-    var newPin2 = prompt("Nhập lại mã PIN mới:");
-    if (newPin !== newPin2) return alert("Hai lần nhập PIN mới không khớp.");
-    changePin(oldPin, newPin)
-      .then(function () { alert("Đã đổi mã PIN."); })
-      .catch(function (e) { alert(errorText(e)); });
+    openPinModal({
+      title: "Đổi mã PIN",
+      submitLabel: "Đổi mã PIN",
+      fields: [
+        { key: "old", label: "Mã PIN hiện tại (4 số)" },
+        { key: "new", label: "Mã PIN mới (4 số)" },
+        { key: "confirm", label: "Nhập lại mã PIN mới" }
+      ],
+      onSubmit: async function (v) {
+        if (!validPin(v.old)) return "Mã PIN phải gồm 4 chữ số.";
+        if (!validPin(v["new"])) return "Mã PIN mới phải gồm 4 chữ số.";
+        if (v["new"] !== v.confirm) return "Hai lần nhập PIN mới không khớp.";
+        await changePin(v.old, v["new"]);   // same Edge Function + payload; throws -> caught -> shown
+        alert("Đã đổi mã PIN.");            // preserve existing success feedback
+      }
+    });
   }
 
   function promptDelete() {
-    if (!confirm("Xóa tài khoản sẽ xóa vĩnh viễn toàn bộ tiến độ trên cloud. Tiếp tục?")) return;
-    var pin = prompt("Nhập mã PIN để xác nhận xóa tài khoản:");
-    if (pin == null) return;
-    if (!validPin(pin)) return alert("Mã PIN phải gồm 4 chữ số.");
-    deleteAccount(pin)
-      .then(function () { localLogout(); alert("Đã xóa tài khoản."); location.reload(); })
-      .catch(function (e) { alert(errorText(e)); });
+    openPinModal({
+      title: "Xóa tài khoản",
+      warning: "Xóa tài khoản sẽ xóa vĩnh viễn toàn bộ tiến độ trên cloud. Nhập mã PIN để xác nhận.",
+      submitLabel: "Xóa tài khoản",
+      danger: true,
+      fields: [{ key: "pin", label: "Mã PIN (4 số)" }],
+      onSubmit: async function (v) {
+        if (!validPin(v.pin)) return "Mã PIN phải gồm 4 chữ số.";
+        await deleteAccount(v.pin);         // same Edge Function + payload
+        localLogout(); alert("Đã xóa tài khoản."); location.reload();   // preserve exact success behavior
+      }
+    });
   }
 
   /* ============================================================

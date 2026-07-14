@@ -88,6 +88,9 @@ GROUPS = {
         "tests/regression/auth_test.py",
         "tests/regression/offline_test.py",
     ],
+    "Native readiness (Phase 24A)": [
+        "tests/regression/platform_adapter.py",
+    ],
 }
 
 def free_port():
