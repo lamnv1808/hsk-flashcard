@@ -156,7 +156,9 @@
   }
 
   /* ---------------- study-session launchers ---------------- */
-  function studyIds(ids) { if (window.HSK_APP && ids.length) HSK_APP.startSession(ids); }
+  // Phase 23: pass the transient source so completion can offer "return to this feature". The
+  // feature string is validated by app.js against its allowlist; unknown -> generic explicit.
+  function studyIds(ids, source) { if (window.HSK_APP && ids.length) HSK_APP.startSession(ids, source); }
 
   /* ---------------- wire up ---------------- */
   function on(id, fn) { var el = $(id); if (el) el.onclick = fn; }
@@ -166,14 +168,14 @@
   on("weakBack", goHome); on("insightsBack", goHome); on("bmBack", goHome);
   var wl = $("weakLevel"); if (wl) wl.onchange = renderWeak;
   var wt = $("weakTop"); if (wt) wt.onchange = renderWeak;
-  on("weakStudyBtn", function () { studyIds(weakShown.map(function (x) { return x.card.id; })); });
+  on("weakStudyBtn", function () { studyIds(weakShown.map(function (x) { return x.card.id; }), { feature: "weak" }); });
   on("chart7", function () { chartDays = 7; renderChart(); });
   on("chart30", function () { chartDays = 30; renderChart(); });
   var bl = $("bmLevel"); if (bl) bl.onchange = renderBookmarks;
   var bs = $("bmSearch"); if (bs) bs.oninput = renderBookmarks;
   on("bmStudyBtn", function () {
     var ids = MQ.getBookmarkedCards({ level: $("bmLevel").value }).map(function (c) { return c.id; });
-    studyIds(ids);
+    studyIds(ids, { feature: "bookmarks" });
   });
 
   window.HSKInsights = { showWeak: showWeak, showInsights: showInsights, showBookmarks: showBookmarks };
