@@ -327,7 +327,11 @@
    * every close. onSubmit(values) returns an error STRING to keep the modal open (no request
    * made), or a falsy value on success (modal closes). */
   function openPinModal(opts) {
-    var trigger = document.activeElement;
+    // Explicit, stable return-focus target: the account control that spawns these flows. The
+    // profile menu has already hidden itself (blurring its item to <body>) by the time we open,
+    // so document.activeElement is NOT a reliable trigger — resolve #profileBtn at close time.
+    function returnFocusTarget() { var b = document.getElementById("profileBtn"); return (b && b.isConnected) ? b : null; }
+    var submitting = false;   // modal-local in-flight guard (Finding 1): at most one onSubmit at a time
     var back = document.createElement("div");
     back.className = "auth-gate visible pin-modal-gate";
     var card = el("div", { "class": "auth-card pin-modal", "role": "dialog", "aria-modal": "true", "aria-labelledby": "pinModalTitle" });
@@ -365,11 +369,14 @@
       document.removeEventListener("keydown", onKey, true);
       document.body.classList.remove("auth-locked");
       if (back.parentNode) back.parentNode.removeChild(back);
-      if (trigger && typeof trigger.focus === "function") trigger.focus();  // restore focus
+      var rt = returnFocusTarget();                    // restore focus to #profileBtn (safe fallback: none)
+      if (rt && typeof rt.focus === "function") rt.focus();
     }
     function focusables() { return [].slice.call(card.querySelectorAll("input,button")); }
     function onKey(e) {
-      if (e.key === "Escape") { e.preventDefault(); close(); return; }   // Escape cancels (no request)
+      // While a submission is in flight, Escape must not close/cancel (no second action, no
+      // inconsistent state); wait for the request to resolve.
+      if (e.key === "Escape") { if (submitting) { e.preventDefault(); return; } e.preventDefault(); close(); return; }
       if (e.key === "Tab") {                                             // trap focus in the dialog
         var f = focusables(); if (!f.length) return;
         var first = f[0], last = f[f.length - 1];
@@ -378,15 +385,21 @@
       }
     }
     async function submit() {
+      if (submitting) return;               // ignore extra clicks / Enter presses while pending
+      submitting = true;
       msg.textContent = "";
       var values = {}; opts.fields.forEach(function (f) { values[f.key] = inputs[f.key].value; });
       submitBtn.disabled = true; cancelBtn.disabled = true;
       var err;
       try { err = await opts.onSubmit(values); }
       catch (e) { err = errorText(e); }
-      finally { submitBtn.disabled = false; cancelBtn.disabled = false; }
-      if (err) { msg.textContent = err; }   // validation/server error -> stay open, no navigation
-      else { close(); }                     // success -> close (onSubmit already ran its side effect)
+      if (err) {                            // validation/server error -> reset to a retryable state
+        msg.textContent = err;
+        submitBtn.disabled = false; cancelBtn.disabled = false;
+        submitting = false;
+      } else {
+        close();                            // success -> close (onSubmit already ran its side effect)
+      }
     }
     cancelBtn.onclick = close;
     submitBtn.onclick = submit;

@@ -105,8 +105,13 @@ with sync_playwright() as p:
     # ===================== Part B: PIN modal (configured + logged-in mock) =====================
     ctxB = b.new_context(viewport={'width': 390, 'height': 844})
     ctxB.route('**/supabase-config.js', lambda r: r.fulfill(status=200, content_type='application/javascript', body=CONFIG))
+    mstate = {'cp_fail': False, 'da_fail': False}
     def mock_supabase(route):
         u = route.request.url
+        if 'functions/v1/change-pin' in u and mstate['cp_fail']:
+            route.fulfill(status=400, content_type='application/json', body='{"error":"Sai mã PIN"}'); return
+        if 'functions/v1/delete-account' in u and mstate['da_fail']:
+            route.fulfill(status=400, content_type='application/json', body='{"error":"Sai mã PIN"}'); return
         body = '[]' if '/rest/v1' in u else '{}'
         route.fulfill(status=200, content_type='application/json', body=body)
     ctxB.route('https://x.test/**', mock_supabase)
@@ -117,7 +122,12 @@ with sync_playwright() as p:
         if 'functions/v1/delete-account' in r.url: reqs['delete-account'] += 1
     pgB.on('request', on_req)
     pgB.on('pageerror', lambda e: errsB.append('PAGEERR:' + str(e)))
-    pgB.on('console', lambda m: errsB.append('CON:' + m.text) if m.type == 'error' else None)
+    # Ignore browser network-level logging for the deliberately-injected 400 server-failure tests
+    # (those are expected; we only care about JS/page errors).
+    def on_con(m):
+        if m.type == 'error' and 'Failed to load resource' not in m.text:
+            errsB.append('CON:' + m.text)
+    pgB.on('console', on_con)
     pgB.on('dialog', lambda d: d.accept())   # auto-accept alert() success/confirm
     pgB.goto(URL); pgB.wait_for_timeout(300)
     # seed a logged-in session, then reload so auth.js boots logged-in
@@ -176,20 +186,61 @@ with sync_playwright() as p:
     check('B focus moved into modal (first PIN field)', pgB.evaluate("()=>document.activeElement && document.activeElement.id==='pin_old'"))
     pgB.evaluate("()=>{ [...document.querySelectorAll('.pin-modal-actions .secondary-btn')][0].click(); }"); pgB.wait_for_timeout(60)
     check('B cancel closes modal', not modal_open())
-    # trigger (menu item) is display:none by the time the modal opened (menu self-hides), so focus is
-    # safely restored to <body> — not trapped in the removed modal, not lost/null.
-    check('B focus safely restored (not trapped in removed modal)', pgB.evaluate("()=>document.activeElement===document.body && !document.querySelector('.pin-modal')"))
+    # Finding 2: focus returns to the stable account control (#profileBtn), not <body>.
+    check('B cancel restores focus to #profileBtn', pgB.evaluate("()=>document.activeElement===document.getElementById('profileBtn') && !document.querySelector('.pin-modal')"))
 
-    # Delete account: invalid -> no request; valid -> exactly one delete-account request
+    # ---- Finding 1: duplicate-submit guard (Change PIN) ----
+    def fill_valid_cp():
+        set_field('old', '1111'); set_field('new', '2222'); set_field('confirm', '2222')
+    open_change_pin(); fill_valid_cp(); before = reqs['change-pin']
+    pgB.evaluate("()=>{ const b=[...document.querySelectorAll('.pin-modal-actions .primary-btn')][0]; b.click(); b.click(); }"); pgB.wait_for_timeout(200)
+    check('B change-PIN rapid double-click -> exactly one request', reqs['change-pin'] - before == 1)
+    open_change_pin(); fill_valid_cp(); before = reqs['change-pin']
+    pgB.evaluate("()=>{ const i=document.getElementById('pin_old'); const e=()=>i.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true})); e(); e(); }"); pgB.wait_for_timeout(200)
+    check('B change-PIN rapid double-Enter -> exactly one request', reqs['change-pin'] - before == 1)
+    open_change_pin(); fill_valid_cp(); before = reqs['change-pin']
+    pgB.evaluate("()=>{ document.getElementById('pin_old').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true})); [...document.querySelectorAll('.pin-modal-actions .primary-btn')][0].click(); }"); pgB.wait_for_timeout(200)
+    check('B change-PIN Enter+click -> exactly one request', reqs['change-pin'] - before == 1)
+    open_change_pin(); fill_valid_cp()
+    pend = pgB.evaluate("()=>{ const sb=[...document.querySelectorAll('.pin-modal-actions .primary-btn')][0]; const cb=[...document.querySelectorAll('.pin-modal-actions .secondary-btn')][0]; sb.click(); return {submit:sb.disabled, cancel:cb.disabled}; }")
+    check('B pending keeps submit+cancel disabled', pend['submit'] == True and pend['cancel'] == True)
+    pgB.wait_for_timeout(180)
+    # server failure -> guard released -> exactly one retry
+    mstate['cp_fail'] = True
+    open_change_pin(); fill_valid_cp(); before = reqs['change-pin']; submit()
+    check('B change-PIN server fail -> one request', reqs['change-pin'] - before == 1)
+    check('B change-PIN server fail -> stays open + error + retryable', modal_open() and modal_msg() != '' and pgB.evaluate("()=>![...document.querySelectorAll('.pin-modal-actions .primary-btn')][0].disabled"))
+    mstate['cp_fail'] = False
+    before = reqs['change-pin']; submit(); pgB.wait_for_timeout(200)
+    check('B change-PIN retry -> exactly one more request + closes', reqs['change-pin'] - before == 1 and not modal_open())
+    # validation failure never permanently locks submission
+    open_change_pin(); set_field('old', '12'); set_field('new', '2222'); set_field('confirm', '2222'); before = reqs['change-pin']; submit()
+    check('B validation fail -> no request, not locked', reqs['change-pin'] - before == 0 and modal_open() and pgB.evaluate("()=>![...document.querySelectorAll('.pin-modal-actions .primary-btn')][0].disabled"))
+    fill_valid_cp(); before = reqs['change-pin']; submit(); pgB.wait_for_timeout(200)
+    check('B after validation fix -> exactly one request + closes', reqs['change-pin'] - before == 1 and not modal_open())
+    # Escape restores focus to #profileBtn
+    open_change_pin()
+    pgB.evaluate("()=>document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))"); pgB.wait_for_timeout(60)
+    check('B Escape closes + restores focus to #profileBtn', (not modal_open()) and pgB.evaluate("()=>document.activeElement===document.getElementById('profileBtn')"))
+
+    # Delete account: invalid -> no request; server fail -> retryable; rapid double-submit -> one request
     open_delete()
     check('B delete modal opens without prompt', modal_open() and pgB.evaluate("()=>window.__prompts")==0)
     set_field('pin', '9'); submit()
     check('B delete invalid PIN -> no request', reqs['delete-account'] == 0 and modal_open())
-    # capture the prompt count BEFORE submitting (valid delete triggers location.reload, wiping the spy)
-    prompts_before_delete = pgB.evaluate("()=>window.__prompts")
-    check('B delete flow never called prompt (pre-reload)', prompts_before_delete == 0)
-    set_field('pin', '1234'); submit(); pgB.wait_for_timeout(300)   # success -> localLogout+alert+reload
-    check('B delete valid -> exactly one server request', reqs['delete-account'] == 1)
+    # server failure -> guard released, modal retryable
+    mstate['da_fail'] = True
+    set_field('pin', '1234'); before = reqs['delete-account']; submit()
+    check('B delete server fail -> one request', reqs['delete-account'] - before == 1)
+    check('B delete server fail -> stays open + retryable', modal_open() and pgB.evaluate("()=>![...document.querySelectorAll('.pin-modal-actions .primary-btn')][0].disabled"))
+    # capture prompt count BEFORE the successful (reloading) submit; assert no prompt ever used
+    check('B delete flow never called prompt (pre-reload)', pgB.evaluate("()=>window.__prompts") == 0)
+    # rapid double-click on a valid delete -> exactly ONE delete-account request (then reload)
+    mstate['da_fail'] = False
+    set_field('pin', '1234'); before = reqs['delete-account']
+    pgB.evaluate("()=>{ const b=[...document.querySelectorAll('.pin-modal-actions .primary-btn')][0]; b.click(); b.click(); }")
+    pgB.wait_for_timeout(350)   # success -> localLogout+alert+reload
+    check('B delete rapid double-click -> exactly one request', reqs['delete-account'] - before == 1)
 
     check('B no console/page errors', len(errsB) == 0)
     ctxB.close()
