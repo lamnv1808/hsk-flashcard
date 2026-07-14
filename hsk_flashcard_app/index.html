@@ -103,6 +103,30 @@
           <label class="switch-row"><input type="checkbox" id="showFrontPinyin" /><span>Hiển thị Pinyin ở mặt trước</span></label>
         </div>
 
+        <div class="section-title">
+          <h3>Mục tiêu hằng ngày</h3>
+        </div>
+        <div id="dailyGoalPanel" class="daily-goal-panel">
+          <div class="dg-control">
+            <label class="config-label" for="dailyGoalSelect">Mục tiêu hôm nay</label>
+            <select id="dailyGoalSelect" class="select-control">
+              <option value="10">10 thẻ</option>
+              <option value="20">20 thẻ</option>
+              <option value="30">30 thẻ</option>
+              <option value="50">50 thẻ</option>
+            </select>
+          </div>
+          <div class="dg-progress">
+            <div class="dg-progress-head">
+              <span class="dg-label">Tiến độ hôm nay</span>
+              <strong id="dailyGoalText" class="dg-text">0/20 thẻ</strong>
+            </div>
+            <div id="dailyGoalBar" class="dg-bar" role="progressbar" aria-label="Tiến độ mục tiêu hôm nay" aria-valuemin="0" aria-valuemax="20" aria-valuenow="0">
+              <span id="dailyGoalBarFill" style="width:0%"></span>
+            </div>
+          </div>
+        </div>
+
         <div class="stats-grid">
           <div class="stat-card"><span>Đã học</span><strong id="learnedStat">0</strong></div>
           <div class="stat-card"><span>Chuỗi ngày</span><strong id="streakStat">0</strong></div>

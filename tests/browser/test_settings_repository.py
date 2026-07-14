@@ -146,6 +146,26 @@ def main():
         for k in ["present","all","missing","empty"]:
             check("sessionSize:" + k, ss[k])
 
+        # ---- DAILY GOAL (Phase 22A: allowed [10,20,30,50]; default 20) ----
+        dgl = pg.evaluate("""()=>{
+          const mk=HSKUtil.createSettingsRepository;
+          const G=v=>mk(()=>({dailyGoal:v})).getDailyGoal();
+          const src={dailyGoal:'30'}; const snap=JSON.stringify(src);
+          const r=mk(()=>src); r.getDailyGoal();
+          return {
+            allowed: G(10)===10 && G(20)===20 && G(30)===30 && G(50)===50,
+            missing: mk(()=>({})).getDailyGoal()===20,
+            nullSrc: mk(()=>null).getDailyGoal()===20,
+            numericStrings: G('10')===10 && G('20')===20 && G('30')===30 && G('50')===50,
+            unsupported: G(15)===20 && G(0)===20 && G(100)===20 && G(-20)===20,
+            corrupt: G('fast')===20 && G(null)===20 && G(undefined)===20 && G(NaN)===20 && G({})===20,
+            sourceUnmutated: JSON.stringify(src)===snap,
+            typeIsNumber: typeof mk(()=>({dailyGoal:'30'})).getDailyGoal()==='number'
+          };
+        }""")
+        for k in ["allowed","missing","nullSrc","numericStrings","unsupported","corrupt","sourceUnmutated","typeIsNumber"]:
+            check("dailyGoal:" + k, dgl[k])
+
         # ---- ACCOUNT ISOLATION (provider reflects active object; no stale cache) ----
         ai = pg.evaluate("""()=>{
           const mk=HSKUtil.createSettingsRepository;

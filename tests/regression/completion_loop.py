@@ -77,7 +77,8 @@ with sync_playwright() as p:
     check('T1 due remaining > 0', due > 0)
     hh = habit_html(pg)
     check('T1 habit shows due-remaining number', str(due) in hh and 'Còn cần ôn' in hh)
-    check('T1 habit shows learned today = 9', 'Đã học hôm nay' in hh and '>9<' in hh)
+    # Phase 22A: the "today" item is goal-aware (learned/goal); fresh localStorage -> goal 20.
+    check('T1 habit shows learned today = 9/20', 'Đã học hôm nay' in hh and '9/20' in hh)
     check('T1 habit shows streak = 1', 'Chuỗi ngày' in hh and '>1<' in hh)
     # continue shown, N = min(size, due) = 10
     check('T1 continue visible', cont_hidden(pg)==False)

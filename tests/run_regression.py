@@ -77,6 +77,7 @@ GROUPS = {
         "tests/regression/features_test.py",
         "tests/regression/qa2.py",
         "tests/browser/test_metadata_sync.py",
+        "tests/regression/daily_goal.py",
     ],
     "Test Mode": [
         "tests/regression/test_mode.py",
