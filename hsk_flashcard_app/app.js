@@ -272,13 +272,9 @@ function renderDailyGoal(){
   bar.setAttribute("aria-valuetext",dailyGoalAriaText(dg));                 // uncapped real progress
 }
 
-function updateStreak(){
-  const d=today(), last=settings.lastStudy;
-  if(last===d) return;
-  const y=new Date(); y.setDate(y.getDate()-1);
-  settings.streak = last===y.toISOString().slice(0,10) ? (settings.streak||0)+1 : 1;
-  settings.lastStudy=d; saveSettings();
-}
+// Phase 22B: the streak is no longer touched at session start. A streak "day" is now activated by
+// the first unique graded card of the local day, owned by metadata.js recordDailyLearn (aligned
+// with the Phase 22A daily count). The old session-start updateStreak() was removed.
 
 function startStudy(levels){
   studySource={ type:"levels", levels:levels.slice() };   // Phase 21: completion-UX gating only
@@ -287,11 +283,11 @@ function startStudy(levels){
 
   // Read-only construction via StudySessionEngine (Phase 16; delegates to StudySessionQuery
   // Phase 5: due -> fresh(not-in-due) -> random fallback). app.js still owns the mutable
-  // session state, streak write, view + first render.
+  // session state, view + first render. Streak is NOT written here (Phase 22B).
   session=studyEngine.buildSession({ levels, sessionSize: sizeSetting }).cards;
 
   sessionState=sessionSM.startSession({ cardIds: session.map(c=>c.id) });   // currentIndex 0, flipped false, no grades
-  snapshots={}; updateStreak(); showView("studyView"); renderCard();
+  snapshots={}; showView("studyView"); renderCard();
 }
 
 // Vocab pinyin (column C): shown on the FRONT by default; when the setting is off it
@@ -627,7 +623,7 @@ window.HSK_APP = {
     // Deactivate any non-core view (Weak Words / Bookmarks / etc.) before entering
     // Study Mode, since showView() only manages home/study/complete.
     document.querySelectorAll(".view").forEach(v=>v.classList.remove("active"));
-    updateStreak(); showView("studyView"); renderCard();
+    showView("studyView"); renderCard();   // Phase 22B: no streak write at explicit-session start
     return true;
   },
   // Re-read localStorage into memory after a cloud pull merges new data.
