@@ -56,6 +56,7 @@
   }
 
   var pack = NS.createContentPack({
+    // ---- legacy fields (unchanged; every existing consumer/test sees the same values) ----
     id: "hsk",
     version: "1.0.0",
     title: "HSK Tiếng Trung",
@@ -64,7 +65,34 @@
     fieldRoles: FIELD_ROLES,
     testModes: TEST_MODES,
     deckProvider: deckProvider,
-    getCards: function () { return window.HSK_CARDS || []; }   // live source; never cloned
+    getCards: function () { return window.HSK_CARDS || []; },  // live source; never cloned
+
+    // ---- Content Pack v1 manifest (Phase 24C, additive; FACTUAL values only) ----
+    schemaVersion: 1,
+    packId: "hsk",
+    status: "launch",
+    courseId: "hsk",
+    courseType: "exam",
+    // Target = Simplified Chinese; the UI and meanings are Vietnamese today.
+    languageProfile: { target: "zh-CN", translation: "vi", instruction: "vi", script: "Hans", direction: "ltr" },
+    // Audio reads the target-language word/example only (never pinyin or Vietnamese).
+    audio: { locale: "zh-CN", fallbackLocales: ["zh"], readFields: ["primaryPrompt", "exampleText"] },
+    // Reserved integer block for HSK (existing ids 1..5002 sit inside it). One global
+    // integer card namespace; cross-pack overlap rejection lands in the Phase 24E registry.
+    idRange: { min: 1, max: 999999 },
+    launch: { visible: true, readiness: "launch" },
+    // Descriptive mirrors of the CURRENT runtime (app.js is not migrated in Phase 24C):
+    search: { fields: ["primaryPrompt", "pronunciation", "definition"] },
+    presentation: {
+      frontRoles: ["primaryPrompt", "pronunciation"],
+      backRoles: ["primaryPrompt", "pronunciation", "definition", "exampleText", "examplePronunciation", "exampleTranslation"]
+    },
+    // Provenance: only what is documented in the repo (data.js header + importer).
+    // publisher / license / url / checksums / generatedAt are NOT documented today and
+    // are deliberately OMITTED rather than invented; the Phase 24D pipeline supplies them.
+    source: { origin: "source_data/HSK1-HSK6.xlsx" }
+    // `levels` and `cardCount` are intentionally omitted: decks and counts are DERIVED
+    // from the cards (deckProvider), so declaring them statically could drift.
   });
 
   // The single active content pack (read-only). No registry, no switcher.
