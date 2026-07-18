@@ -1,0 +1,7 @@
+sourceKey,deck,primaryPrompt,definition,exampleText,exampleTranslation,tags,notes
+en-001,UNIT1,water,nước,Drink some water.,Uống chút nước.,noun,
+en-002,UNIT1,bridge,cây cầu,The bridge is long.,Cây cầu thì dài.,noun,
+en-003,UNIT1,remember,ghi nhớ,I remember the word.,Tôi nhớ từ này.,verb,no pronunciation column on purpose
+en-004,UNIT2,-ing,"hậu tố, tiếp diễn",,,suffix,leading hyphen is intentional
+en-005,UNIT2,forecast,dự báo,The forecast was wrong.,Dự báo đã sai.,noun,
+en-006,UNIT2,retention,sự ghi nhớ,Retention improves with review.,Ghi nhớ cải thiện nhờ ôn tập.,noun,

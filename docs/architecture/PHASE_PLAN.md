@@ -129,7 +129,8 @@ All 20 phases delivered on `architecture-v2`; full suite 28/28; production behav
 | 24B | Product freeze + read-only release tooling | COMPLETE |
 | 24C | ContentPack v1, integer id invariant, HSK v1 adapter | COMPLETE (merged, deployed, production validated) |
 | **24D** | **Deterministic Excel/CSV -> ContentPack pipeline** | **COMPLETE (build-time only; no runtime change)** |
-| 24E | Pack registry + pack-scoped runtime | pending |
+| **24E-A** | **Pack registry + boot foundation** | **COMPLETE (foundation only; zero production integration)** |
+| 24E-B | Pack registry integration + pack-scoped runtime | pending — owns the single SW bump v36 -> v37 |
 | 24F | Three-option onboarding + real HSK/IELTS/TOEIC content ingestion and QA | pending |
 | 25A–31 | Native, store compliance, submission, public release | pending |
 

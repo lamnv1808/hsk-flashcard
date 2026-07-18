@@ -1,0 +1,24 @@
+key,value
+schemaVersion,1
+packId,synth-en
+version,1.0.0
+status,draft
+title,Synthetic English Fixture
+shortTitle,SynthEN
+description,Test-only synthetic pack. Not learning content. Never a launch option.
+courseId,synth-en
+courseType,general
+languageProfile.target,en
+languageProfile.translation,vi
+languageProfile.direction,ltr
+audio.locale,en-US
+audio.fallbackLocales,en
+audio.readFields,"primaryPrompt,exampleText"
+idRange.min,5000000
+idRange.max,5999999
+launch.visible,false
+launch.readiness,internal
+presentation.frontRoles,primaryPrompt
+presentation.backRoles,"definition,exampleText"
+search.fields,"primaryPrompt,definition"
+capabilities,"study,test"
