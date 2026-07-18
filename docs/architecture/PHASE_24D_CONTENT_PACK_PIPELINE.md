@@ -592,26 +592,72 @@ was created or committed.
 
 ## Rollback
 
-Anchor: `main` = `52bb08a61ff3ba79b85b77d3265a08988f92ea5a` (Phase 24C merged). Phase 24D is a single
-commit on `phase-24d-content-pack-pipeline`.
+Anchor: `main` = `52bb08a61ff3ba79b85b77d3265a08988f92ea5a` (Phase 24C merged). Phase 24D is four
+commits on `phase-24d-content-pack-pipeline`.
 
-`git revert <sha>` removes `scripts/build_content_pack.py`, `scripts/contentpack/`, the six new
+Reverting the initial pipeline commit removes `scripts/build_content_pack.py`, `scripts/contentpack/`, the six new
 suites and `tests/fixtures/packs/`, and restores `tests/run_regression.py` (deregistering the suites),
 `.gitignore`, `docs/architecture/PHASE_PLAN.md` and `docs/release/MILESTONE_1_PRODUCT_FREEZE.md`.
 Delete `build/content-packs/` if present — it is referenced by no runtime asset, so removal has zero
 runtime effect. Authored sources and any ledger are preserved; discarding a ledger would be the one
 genuinely destructive act available here.
 
-The phase is three commits: `e829247` (pipeline), `a4bcb35` (transactional publication) and the
-single-writer concurrency follow-up. Reverting the concurrency commit alone returns to **43/43** and
-removes the cross-process guarantee; reverting it and `a4bcb35` returns to **42/42** and reinstates
-the split-write defect; reverting all three returns to **36/36**. Partial reverts reintroduce known
-defects and are not recommended.
+The phase is four commits, newest first:
+
+| Commit | Content | Suite count if reverted from here |
+|---|---|---|
+| `879d803` | canonical persistent per-pack lock | 44/44 (output-relative lock returns) |
+| `9a4b40c` | cross-process single-writer lock | 43/43 (no cross-process guarantee) |
+| `a4bcb35` | transactional ledger + publication | 42/42 (split-write defect returns) |
+| `e829247` | the pipeline itself | 36/36 |
+
+Revert in that order. Partial reverts reintroduce known defects and are not recommended.
 
 Expected suite count after full rollback: **36/36**. Regression: `python tests/run_regression.py`.
 Release check: `python scripts/release_check.py` → 9/9, `hsk-flashcards-v36`, 36 precache assets —
 unchanged before and after, because Phase 24D never touched a gated surface. No user-data migration,
 no Supabase rollback, no redeploy and no cache purge are required.
+
+## Owner release order (authoritative)
+
+`scripts/release_check.py` is a **post-push, pre-deploy** gate. Its own header states there is
+intentionally no flag to skip any gate, and three of them are synchronization gates:
+
+```
+3. current branch is `main`
+4. working tree completely clean (staged + unstaged + untracked)
+5. local `main` == local `origin/main`
+9. those invariants are UNCHANGED after the regression run
+```
+
+**Therefore the checker cannot be run between the merge and the push.** Immediately after a local
+`git merge --no-ff`, local `main` has advanced to the merge commit while `origin/main` has not, so
+gate 5 (`main == origin/main`) fails by construction. Any sequence of the form
+*merge → release_check → push* is impossible and must not be followed. The checker is correct; the
+ordering is what has to change.
+
+The authoritative sequence:
+
+1. **Review** the four Phase 24D commits and this document.
+2. **Checkout main** — `git checkout main`
+3. **Merge, no fast-forward** — `git merge --no-ff phase-24d-content-pack-pipeline`
+4. **Run the full local regression** — `python tests/run_regression.py` → expect **44/44 PASS**.
+   This is the gate that stands in for the checker at this point, because the checker cannot yet run.
+5. **Push** — `git push origin main`
+6. **Only now run the release checker** — `python scripts/release_check.py` → expect **9/9 PASS**,
+   branch `main`, clean tree, `main == origin/main`, service worker `hsk-flashcards-v36`,
+   36 precache assets, full regression 44/44.
+7. **No Render deployment is required for Phase 24D.** No runtime file changed, nothing under
+   `hsk_flashcard_app/` changed, the service worker and precache inventory are unchanged, and every
+   Phase 24D output is build-time-only and lives outside the runtime app.
+
+> On success the checker prints generic OWNER-ONLY MANUAL RELEASE STEPS that include a Render deploy.
+> Those steps are written for phases that change a runtime asset. **They do not apply to Phase 24D**,
+> and no deploy should be performed merely because `main` received build tooling and documentation.
+> The checker is not modified to special-case this; the exception is recorded here instead.
+
+Running the checker on the feature branch is expected to fail **only** its `branch is main` gate
+(6/7). That is by design and is not a defect.
 
 ## Known limitations (honest)
 
