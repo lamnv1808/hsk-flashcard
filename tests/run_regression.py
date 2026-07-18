@@ -98,6 +98,16 @@ GROUPS = {
     "Release tooling (Phase 24B)": [
         "tests/tooling/test_release_check.py",
     ],
+    "Content pack pipeline (Phase 24D)": [
+        "tests/data/test_pack_build_parse.py",
+        "tests/data/test_pack_build_identity.py",
+        "tests/data/test_pack_build_determinism.py",
+        "tests/data/test_pack_build_safety.py",
+        "tests/data/test_pack_build_qa.py",
+        "tests/data/test_pack_build_transaction.py",
+        "tests/data/test_pack_build_concurrency.py",
+        "tests/data/test_pack_build_hsk_conformance.py",
+    ],
 }
 
 def free_port():

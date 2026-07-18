@@ -1,0 +1,21 @@
+key,value
+schemaVersion,1
+packId,demo
+version,1.0.0
+status,draft
+title,Demo Pack
+shortTitle,Demo
+description,Synthetic fixture pack. Not learning content.
+courseId,demo
+courseType,general
+languageProfile.target,en
+languageProfile.translation,vi
+languageProfile.direction,ltr
+idRange.min,1000
+idRange.max,1999
+launch.visible,false
+launch.readiness,internal
+presentation.frontRoles,primaryPrompt
+presentation.backRoles,"definition,pronunciation"
+search.fields,"primaryPrompt,definition"
+capabilities,"study,test"

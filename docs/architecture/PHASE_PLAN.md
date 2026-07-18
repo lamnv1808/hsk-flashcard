@@ -116,3 +116,33 @@ commit(s) on `architecture-v2`; `main` untouched.
 ## Status — Architecture v2 COMPLETE (Phases 0–20)
 
 All 20 phases delivered on `architecture-v2`; full suite 28/28; production behavior byte-identical to `production-baseline-v1` (`ecd13fb`). Study session state is now owned by the pure `StudySessionStateMachine` (Phase 20). See [ARCHITECTURE_V2_RELEASE.md](ARCHITECTURE_V2_RELEASE.md). Render deploy remains manual.
+
+---
+
+## Milestone 1 phase status (post Architecture v2)
+
+| Phase | Focus | Status |
+|---|---|---|
+| 24 Discovery | Native/store readiness discovery | COMPLETE |
+| 24A | Runtime native readiness (platform adapter) | COMPLETE |
+| Hotfix 24.1 | Back vocabulary visibility + audio | COMPLETE |
+| 24B | Product freeze + read-only release tooling | COMPLETE |
+| 24C | ContentPack v1, integer id invariant, HSK v1 adapter | COMPLETE (merged, deployed, production validated) |
+| **24D** | **Deterministic Excel/CSV -> ContentPack pipeline** | **COMPLETE (build-time only; no runtime change)** |
+| 24E | Pack registry + pack-scoped runtime | pending |
+| 24F | Three-option onboarding + real HSK/IELTS/TOEIC content ingestion and QA | pending |
+| 25A–31 | Native, store compliance, submission, public release | pending |
+
+### Documentation conflict resolved in Phase 24D
+
+`docs/release/MILESTONE_1_PRODUCT_FREEZE.md` previously listed the *"Generic
+Excel→ContentPack pipeline"* under **Deferred to Milestone 2**, which contradicted
+`PHASE_24C_CONTENT_PACK_V1.md` (merged later), where Phase 24D is the scheduled next
+phase with explicit entry criteria. The owner confirmed that the later frozen Company
+Pack strategy, the merged Phase 24C architecture document, and the Milestone 1
+requirement for three real study options supersede the earlier line. Only the exact
+stale scope and service-worker-version lines were corrected; the freeze document was
+not otherwise rewritten.
+
+Phase 24D changes no runtime file, so the product-freeze rules governing "the web
+product" are not engaged by it.

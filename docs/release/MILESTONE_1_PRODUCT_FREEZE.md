@@ -3,8 +3,9 @@
 ## Objective & non-goals
 Freeze the exact FlashEdu product that ships for Milestone 1 and add read-only release tooling.
 **Phase 24B changes tooling and documentation only** — no production behavior, UI, learning logic,
-runtime asset, storage, sync, auth, service-worker, or Supabase change. Service worker remains
-`hsk-flashcards-v35`.
+runtime asset, storage, sync, auth, service-worker, or Supabase change. The service worker was
+`hsk-flashcards-v35` at the time of Phase 24B; it is **`hsk-flashcards-v36`** since Phase 24C
+bumped it exactly once. Phase 24D did not change it.
 
 ## Milestone 1 Definition of Done
 FlashEdu is **approved and publicly available on BOTH the Apple App Store and Google Play**. A local
@@ -36,9 +37,16 @@ bookmarks, progress persistence, answer-leak protection.
   shows WKWebView/Android gaps; the zh-CN-only / no-leak contract is preserved either way.
 
 ## Deferred to Milestone 2 (out of scope now)
-Generic Excel→ContentPack pipeline; dynamic pack registry/loading; multi-pack library; plugin
-architecture; teacher/school platform; AI learning layer; unrelated UI redesign; framework migration
-(React/Flutter/React Native).
+Multi-pack library beyond the three launch options; plugin architecture; teacher/school platform;
+AI learning layer; unrelated UI redesign; framework migration (React/Flutter/React Native).
+
+> **Superseded (Phase 24D):** this list previously deferred the *generic Excel→ContentPack
+> pipeline* and the *dynamic pack registry/loading* to Milestone 2. Milestone 1 requires HSK,
+> IELTS and TOEIC as three real study options, which requires a way to ingest that content, so
+> the pipeline is Phase 24D (build-time only, shipped) and the registry is Phase 24E — both
+> inside Milestone 1. See `docs/architecture/PHASE_24C_CONTENT_PACK_V1.md` and
+> `docs/architecture/PHASE_24D_CONTENT_PACK_PIPELINE.md`. The freeze rules below are unaffected:
+> Phase 24D changes no runtime file.
 
 ## Freeze rules (after Phase 24B)
 Until Milestone 1 ships, only these changes are allowed on the web product: release blockers, native
