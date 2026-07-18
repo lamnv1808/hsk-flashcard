@@ -1,0 +1,8 @@
+sourceKey,deck,primaryPrompt,definition,pronunciation,exampleText,exampleTranslation,tags,notes
+d-001,L1,爱,"yêu, thương",ài,我爱你。,Tôi yêu bạn.,core,seed row
+d-002,L1,ありがとう,thank you,arigatō,ありがとうございます。,Cảm ơn bạn.,kana,
+d-003,L1,한글,Hangul script,hangeul,한글은 아름답다.,Hangul thì đẹp.,hangul,
+d-004,L2,water,nước,/ˈwɔː.tər/,Drink water.,Uống nước.,noun,
+d-005,L2,-ing,"suffix, continuous aspect",,,,suffix,leading hyphen is intentional
+d-006,L2,打,đánh,dǎ,他打球。,Anh ấy chơi bóng.,verb,
+d-007,L2,打,gọi (điện thoại),dǎ,他打电话。,Anh ấy gọi điện.,verb,polysemy pair with d-006
