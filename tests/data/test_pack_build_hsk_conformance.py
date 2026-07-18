@@ -48,12 +48,22 @@ ROLE_MAP = (
 CARD_COLUMNS = ["sourceKey"] + [role for _, role in ROLE_MAP]
 
 # U+200C ZERO WIDTH NON-JOINER. Present on exactly one shipped HSK card.
-ZWNJ = "‌"
+ZWNJ = "\u200c"
 
 # The single known content defect in the shipped dataset, quantified rather
 # than hidden. Owned by Phase 24F content QA; Phase 24D does not edit data.js.
 KNOWN_ZWNJ_CARD_ID = 1303
+KNOWN_ZWNJ_LEVEL = "HSK5"
+KNOWN_ZWNJ_WORD = "成人"
 KNOWN_ZWNJ_FIELDS = ("example", "examplePinyin", "translation")
+# Exact occurrence count, per field. Any additional card, field or invisible
+# character anywhere in the dataset must fail this suite rather than widen the
+# exception silently.
+KNOWN_ZWNJ_COUNTS = {"example": 2, "examplePinyin": 2, "translation": 1}
+KNOWN_ZWNJ_TOTAL = 5
+
+# Every invisible character the pipeline treats specially.
+INVISIBLES = "\u200b\u200c\u200d\ufeff"
 
 
 def bridge_key(card):
@@ -103,6 +113,42 @@ def main():
     cards = load_cards()
     check("committed data.js still holds the audited card count",
           len(cards) == EXPECTED_TOTAL)
+
+    # --- pin the known production exception exactly ----------------------
+    # Scan every card for every invisible character the pipeline treats
+    # specially. The result must be EXACTLY the one documented card, the three
+    # documented fields, and the documented occurrence counts. A new stray
+    # character anywhere else fails here rather than being absorbed silently.
+    observed = {}
+    for card in cards:
+        for field, value in card.items():
+            if not isinstance(value, str):
+                continue
+            hits = sum(1 for ch in value if ch in INVISIBLES)
+            if hits:
+                observed[(card["id"], field)] = hits
+    expected_map = {(KNOWN_ZWNJ_CARD_ID, f): n
+                    for f, n in KNOWN_ZWNJ_COUNTS.items()}
+    check("exactly one card in data.js carries invisible characters",
+          {cid for cid, _ in observed} == {KNOWN_ZWNJ_CARD_ID})
+    check("exactly the three documented fields are affected",
+          {f for _, f in observed} == set(KNOWN_ZWNJ_FIELDS))
+    check("the per-field invisible-character counts are exactly as documented",
+          observed == expected_map)
+    check("the total invisible-character count is exactly as documented",
+          sum(observed.values()) == KNOWN_ZWNJ_TOTAL)
+    if observed != expected_map:
+        fails.append("invisible-character map changed: %s"
+                     % sorted(set(observed.items()) ^ set(expected_map.items())))
+
+    known_card = {c["id"]: c for c in cards}.get(KNOWN_ZWNJ_CARD_ID, {})
+    check("the exception card is still HSK5",
+          known_card.get("level") == KNOWN_ZWNJ_LEVEL)
+    check("the exception card is still the documented word",
+          known_card.get("word") == KNOWN_ZWNJ_WORD)
+    check("only U+200C is involved, not other invisibles",
+          all(ch == ZWNJ for f in KNOWN_ZWNJ_FIELDS
+              for ch in known_card.get(f, "") if ch in INVISIBLES))
 
     tmp = tempfile.mkdtemp(prefix="cphsk_")
     try:

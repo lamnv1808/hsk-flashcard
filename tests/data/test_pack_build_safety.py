@@ -146,20 +146,31 @@ def main():
               not os.path.exists(app_out))
 
         # --- foreign and stale output ---------------------------------------
+        src = fresh("base")
+        good_out = os.path.join(tmp, "good")
+        run(src, good_out, init_ledger=True)
+        ledger = os.path.join(src, "demo-id-ledger.json")
+        ledger_before = open(ledger, "rb").read()
+
         foreign_out = os.path.join(tmp, "foreign")
         os.makedirs(foreign_out)
         with open(os.path.join(foreign_out, "somebody-elses.txt"), "w") as fh:
             fh.write("not ours")
-        src = fresh("base")
-        blocked = run(src, foreign_out, init_ledger=True)
+        blocked = run(src, foreign_out)
         check("foreign output directory is fatal",
               "FOREIGN_OUTPUT" in codes(blocked))
+        # A build that fails before the commit point must not touch the ledger.
+        # Consuming ids for a publication that never happened is exactly the
+        # defect the transaction protocol removes.
+        check("a refused publish leaves the ledger byte-unchanged",
+              open(ledger, "rb").read() == ledger_before)
+        check("a refused publish leaves no transaction journal",
+              not os.path.isfile(
+                  os.path.join(tmp, ".txn-demo.json")))
+
         forced = run(src, foreign_out, force=True)
         check("--force proceeds over a foreign directory",
               not forced.findings.has_fatal())
-
-        good_out = os.path.join(tmp, "good")
-        run(src, good_out)
         with open(os.path.join(good_out, "obsolete.js"), "w") as fh:
             fh.write("stale")
         cleaned = run(src, good_out)

@@ -104,6 +104,7 @@ GROUPS = {
         "tests/data/test_pack_build_determinism.py",
         "tests/data/test_pack_build_safety.py",
         "tests/data/test_pack_build_qa.py",
+        "tests/data/test_pack_build_transaction.py",
         "tests/data/test_pack_build_hsk_conformance.py",
     ],
 }

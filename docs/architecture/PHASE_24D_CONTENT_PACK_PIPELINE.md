@@ -228,14 +228,122 @@ Company Pack contains no licensing guidance, and Phase 24C deliberately omitted 
 rather than inventing them. This is deferred to the Phase 27/29 legal and store-compliance track.
 It is a pre-existing Milestone 1 risk that this pipeline makes visible; it is not a 24D defect.
 
-## Atomicity and containment
+## Atomicity: transactional ledger + pack publication
 
-Full validation → complete staging (`.staging-<packId>`, sibling of the pack directory) with
-`flush` + `fsync` → per-file `os.replace` promotion → `try/finally` staging cleanup. A failure at
-any earlier point leaves the previous output **byte-unchanged**, verified by test. Obsolete
-generated files are inventoried and removed **only inside the target pack directory**, never
-recursively and never outside the containment root. A directory holding files this pipeline did
-not produce is fatal without `--force`. `--check` writes nothing at all, including staging.
+### The defect this replaces (review follow-up)
+
+The first implementation wrote the ledger and then published the artifacts as **two independent
+durable operations with no shared commit point and no recovery record**. Each was individually
+atomic, which is not the same as being atomic together. Two forbidden states were reachable:
+
+| Window | Observable state |
+|---|---|
+| After `os.replace` on the ledger, before promotion | **new ledger + old artifacts** |
+| Inside the per-file promotion loop | **mixed artifact generations** |
+
+The original note — "a failure after the ledger write converges on the next run" — was not a
+defence. It consumed card ids for a publication that never happened, and it left an ambiguous
+directory that nothing detected or blocked.
+
+### Filesystem constraints (measured on NTFS, not assumed)
+
+| Operation | Result |
+|---|---|
+| `os.replace(dir → existing dir)` | **PermissionError 13** — a one-call directory swap is impossible |
+| `os.replace(dir → absent target)` | atomic |
+| `os.replace(file → existing file)` | atomic |
+| directory rename with an open file inside | fails |
+
+The ledger (`source_data/<packId>/`) and the pack directory (`build/content-packs/<packId>/`)
+have **different parents and may sit on different volumes** (`--output` is free-form). **No single
+atomic rename can cover both**, so recovery requires a journal.
+
+### Protocol — write-ahead journal, idempotent roll-forward
+
+```
+prepare : stage artifacts (fsync) -> stage ledger to <ledger>.txn (fsync)
+COMMIT  : write .txn-<packId>.json (fsync)     <-- the durable commit point
+step 1  : rename O -> .old-<packId>      (atomic; skipped when O is absent)
+step 2  : rename .staging-<packId> -> O  (atomic)
+step 3  : os.replace(<ledger>.txn, <ledger>)   (atomic; skipped for --qa-only)
+step 4  : rmtree .old-<packId>; remove the journal
+```
+
+Durable-state model: **the journal becoming durable is the commit point.** Before it, nothing has
+been replaced, so failure discards staging and the previous generation is byte-identical — and no
+id is consumed. After it, every input a later step needs is consumed *only* by that step, so
+roll-forward is always possible and never needs the old bytes.
+
+Recovery algorithm: `roll_forward()` is the **same function** used by `commit()` — a recovery path
+that differs from the commit path is a recovery path nobody has really tested. Each step is
+checksum-guarded against the journal and therefore idempotent:
+
+1. If the pack directory already matches the journal checksums → skip steps 1–2.
+2. Otherwise staging must exist **and match the journal checksums**; an incomplete or mismatched
+   staging directory is fatal, never promoted.
+3. The ledger is replaced only if its current sha256 differs from the journal's.
+4. Cleanup removes `.old`, staging, `<ledger>.txn` and the journal.
+
+`txid` is the **generation hash** (artifact checksums + ledger checksum) — deterministic, never
+random, so a retry after a failure reproduces the same transaction identity.
+
+Generation semantics: a journal on disk means "generation N+1 is committing". A build that finds
+one **fails closed** with `RECOVERY_REQUIRED` (exit **5**) and refuses to proceed from ambiguous
+state. `--recover` completes it. Staging or `.old` found **without** a journal is pre-commit debris
+— no step ever ran — so it is discarded and reported as `PRECOMMIT_DEBRIS_REMOVED`.
+
+A successful build leaves **no journal, no staging, no `.old`, no `.txn`, no `.tmp`**.
+
+### `--qa-only`
+
+The directory swap installs a whole directory, so a partial publish would otherwise delete the
+data artifacts it did not regenerate. `--qa-only` therefore carries the untouched files forward
+into staging, and the journal records the full resulting set. Verified: the three data artifacts
+stay byte-identical and the ledger is untouched.
+
+### Containment (unchanged)
+
+Every artifact name is containment-checked against the output root using the rules proven in
+`scripts/release_check.py:88-114`: reject URLs, protocol-relative and UNC paths, drive-absolute and
+absolute paths, `..` on either separator, then confirm with `realpath`/`commonpath` so symlinks
+cannot escape. Writing inside `hsk_flashcard_app/` is fatal. A directory holding files this
+pipeline did not produce is fatal without `--force`.
+
+### Failure-injection matrix
+
+`tests/data/test_pack_build_transaction.py` injects a real exception at **15 checkpoints** spanning
+every boundary between durable filesystem operations, in isolated temporary trees using real files
+(no mocks), each starting from a genuinely committed previous generation:
+
+`before_staging` · `artifact_write:demo-content-pack.js` · `artifact_write:demo-cards.js` ·
+`artifact_write:qa-report.json` · `before_ledger_stage` · `ledger_stage` · `after_fsync` ·
+`before_journal` · `after_journal` · `before_dir_swap` · `after_dir_swap_old` ·
+`after_dir_swap_new` · `before_ledger_replace` · `after_ledger_replace` · `during_cleanup`
+
+For every checkpoint the suite asserts: the injected failure actually fired; **pre-commit** →
+artifacts and ledger byte-unchanged, no journal, no staging, no orphan `<ledger>.txn`;
+**post-commit** → a journal marks the transaction, a later build is blocked with
+`RECOVERY_REQUIRED`, `--check` also refuses **and writes nothing**, and recovery succeeds leaving
+zero transaction state. Then, for every checkpoint: exactly one complete generation is exposed;
+ledger and artifacts agree; every prior id is preserved; retry succeeds and is byte-identical on a
+second run; and **no id was consumed only by the failed publish** (`max(id) == prior max + 1`).
+
+Additional cases: incomplete staging → recovery refuses and leaves the prior generation intact;
+corrupt journal → build *and* recovery both blocked, artifacts untouched; no journal → recovery is
+a reported no-op; pre-commit debris → cleaned, never promoted; `--qa-only` → full set preserved.
+
+### `--check` no-write evidence
+
+`--check` is proven to write nothing by **complete before/after directory snapshots of the whole
+case root** (source, ledger and output parent), asserted byte-for-byte — on a healthy pack and
+under pre-existing stale transaction state. It creates no journal, no staging, no `.old`, no
+`.tmp`, and does not create the output directory when it is absent.
+
+### Ledger-ID stability evidence
+
+Across all 15 injected failures plus recovery and two retries, every generation-1 id is preserved
+exactly, no retired id is recycled, and the single new card receives `prior max + 1` — proving no
+id was burned by a publication that did not complete.
 
 Path containment reuses the rules already proven in `scripts/release_check.py:88-114`: reject
 URLs, protocol-relative and UNC paths, drive-absolute and absolute paths, `..` on either
@@ -248,7 +356,7 @@ python scripts/build_content_pack.py --pack <packId> [options]
 ```
 
 `--source --output --ledger --check --verify-deterministic --qa-only --force
---allow-removals --init-ledger --generated-at`
+--allow-removals --init-ledger --recover --generated-at`
 
 | Exit | Meaning |
 |---|---|
@@ -257,6 +365,10 @@ python scripts/build_content_pack.py --pack <packId> [options]
 | 2 | usage / environment / dependency |
 | 3 | `--check` drift |
 | 4 | `--verify-deterministic` byte difference |
+| 5 | incomplete publication transaction present; run `--recover` |
+
+Exit 5 is separate from 1 on purpose: an unfinished transaction is not a content problem, and CI
+must be able to tell "run recovery" apart from "the source is wrong".
 
 Distinguishing 1 from 2 matters: CI must tell "the content is wrong" from "the tool could not run".
 Console output is ASCII-only so a Windows cp1252 console cannot crash a build; non-ASCII content
@@ -289,9 +401,29 @@ cards reproduce byte-for-byte on every field, and card 1303's three fields diffe
 "remove U+200C, then apply the documented edge-trim" (removing the trailing joiner exposes a
 trailing space on `translation`). **Owner decision required — routed to Phase 24F content QA.**
 
+The exception is pinned **narrowly**, so it can never widen silently. The suite scans all 5,002
+cards for U+200B, U+200C, U+200D and U+FEFF and requires the result to be exactly:
+
+| Pin | Value |
+|---|---|
+| Card id | `1303` |
+| Level | `HSK5` |
+| Word | `成人` |
+| Affected fields | `example`, `examplePinyin`, `translation` |
+| Per-field counts | 2 / 2 / 1 |
+| Total occurrences | **5** |
+| Character involved | U+200C only |
+| Normalization result | exactly `normalize_display(value.replace(U+200C, ""))` |
+
+Any additional card, additional field, different count, or any other invisible character anywhere
+in the dataset **fails the suite**. The source correction and the legacy re-import decision belong
+to **Phase 24F**; `source_data/HSK1-HSK6.xlsx`, `data.js`, card 1303 and the legacy importer are
+untouched here.
+
 ## Tests
 
-**42/42** (36 existing preserved unchanged, no assertion removed or weakened; 6 added).
+**43/43** (36 existing preserved unchanged, no assertion removed or weakened; 7 added — 6 in the
+initial phase commit, plus `test_pack_build_transaction.py` in the review follow-up).
 
 | Suite | Covers |
 |---|---|
@@ -300,6 +432,7 @@ trailing space on `translation`). **Owner decision required — routed to Phase 
 | `test_pack_build_determinism.py` | repeated build byte equality, on-disk equality, `--verify-deterministic`, output-path independence, checksum format and inventory, workbook byte churn, `generatedAt` isolation, what each checksum responds to, ledger stability, LF/BOM hygiene, report determinism |
 | `test_pack_build_safety.py` | `</script` + U+2028/U+2029 escaping, wrapper ownership, full Unicode policy, containment (9 rejected forms), app-directory block, foreign/stale output, failure atomicity, orphan temp files, `--check` no-write (tree snapshots), all five exit codes, ASCII-only output, source hygiene greps |
 | `test_pack_build_qa.py` | report shape, completeness metrics, markdown form, full duplicate taxonomy incl. polysemy staying non-fatal, provenance launch gate both ways, handoff schema, severity counts, coordinates |
+| `test_pack_build_transaction.py` | failure injection at 15 durable boundaries, pre/post-commit invariants, blocked builds, recovery, retry determinism, id-consumption, incomplete staging, corrupt journal, pre-commit debris, `--check` no-write under stale state, `--qa-only` preservation |
 | `test_pack_build_hsk_conformance.py` | 5,002-card reproduction, ids/order/decks/counts/fields, rebuild stability at real scale, production byte-unchanged, the U+200C finding |
 
 **Deliberate convention change:** a missing `openpyxl` **fails** these suites rather than being
@@ -352,7 +485,12 @@ Delete `build/content-packs/` if present — it is referenced by no runtime asse
 runtime effect. Authored sources and any ledger are preserved; discarding a ledger would be the one
 genuinely destructive act available here.
 
-Expected suite count after rollback: **36/36**. Regression: `python tests/run_regression.py`.
+The phase is two commits: `e829247` (pipeline) and the transactional-publication follow-up.
+`git revert` the follow-up alone restores the pre-transaction publish behaviour and **36 + 6 =
+42/42**; reverting both returns to **36/36**. Reverting only the follow-up reintroduces the
+two-write defect, so it is not recommended.
+
+Expected suite count after full rollback: **36/36**. Regression: `python tests/run_regression.py`.
 Release check: `python scripts/release_check.py` → 9/9, `hsk-flashcards-v36`, 36 precache assets —
 unchanged before and after, because Phase 24D never touched a gated surface. No user-data migration,
 no Supabase rollback, no redeploy and no cache purge are required.
@@ -365,10 +503,29 @@ no Supabase rollback, no redeploy and no cache purge are required.
 3. **Multi-line card content is unsupported** — embedded newlines are fatal. If a future pack needs
    multi-paragraph fields, the policy needs an explicit, reviewed extension.
 4. **No cross-pack overlap enforcement** — single-pack range validation only, by design; Phase 24E.
-5. **Ledger write and artifact publish are two sequential atomic operations**, not one transaction.
-   Ledger is written first on purpose: a failure after it converges on the next run, whereas the
-   reverse order could hand out different ids.
-6. **`IDENT_RE` cannot match a 2-character id** (inherited from ContentPack v1), so `packId: "jp"`
-   would be rejected. Flagged for the architecture lead; not changed here, since the runtime contract
-   is frozen.
-7. **`notes` is source-only** and is not carried into any artifact beyond a QA coverage count.
+5. **Recovery is explicit, not automatic.** A crash after the commit point leaves a journal that
+   *blocks* further builds until `--recover` runs. This is deliberate — silently rolling forward
+   during an unrelated build would hide that a publication was interrupted — but it does mean an
+   operator step is required after a crash.
+6. **The journal lives on the artifact volume.** If the ledger volume becomes unavailable between
+   the commit point and step 3, recovery fails closed with `RECOVERY_FAILED` and must be re-run once
+   the volume returns. It never invents a ledger.
+7. **`IDENT_RE` cannot match a 2-character id** (inherited from ContentPack v1), so `packId: "jp"`
+   would be rejected. **Deferred:** the runtime contract is frozen, and the future JLPT pack uses
+   `jlpt`, so nothing is blocked. Flagged for the architecture lead.
+8. **`notes` is source-only** and is not carried into any artifact beyond a QA coverage count.
+
+---
+
+## Review follow-up — scope confirmations
+
+- **Card 1303** remains **deferred to Phase 24F**. `source_data/HSK1-HSK6.xlsx`,
+  `hsk_flashcard_app/data.js`, card 1303 itself and `scripts/import_hsk_excel.py` are unmodified.
+- **`IDENT_RE` / the two-character `jp` issue** remains **deferred**. The ContentPack v1 runtime
+  contract is frozen and unchanged; the future JLPT pack uses `jlpt`, so nothing is blocked.
+- **Phase 24E was not started.** No registry, no runtime loader, no pack switching, no onboarding,
+  no runtime pack promotion.
+- **No service-worker change.** `hsk-flashcards-v36`; ASSETS remains exactly 36 entries;
+  `scripts/release_check.py` and its pinned v36 assertion are untouched.
+- No IELTS or TOEIC content, no HSK production data change, no native/Capacitor work, no
+  dependency installation, no production Supabase contact, no real user data.

@@ -14,6 +14,7 @@ Exit codes:
     2  usage / environment / dependency failure
     3  --check found drift between the source and the committed output
     4  --verify-deterministic found a byte difference between two builds
+    5  an incomplete publication transaction is present; run --recover
 
 Console output is ASCII-only so a Windows cp1252 console cannot crash a build.
 Non-ASCII content appears only inside the UTF-8 artifacts.
@@ -29,13 +30,16 @@ from contentpack import schema                      # noqa: E402
 from contentpack.findings import (                  # noqa: E402
     FATAL, LAUNCH_BLOCKING, WARNING, INFO, ascii_safe,
 )
-from contentpack.pipeline import Options, build, verify_deterministic  # noqa: E402
+from contentpack.pipeline import (                # noqa: E402
+    Options, build, recover, verify_deterministic,
+)
 
 EXIT_OK = 0
 EXIT_FATAL = 1
 EXIT_USAGE = 2
 EXIT_DRIFT = 3
 EXIT_NONDETERMINISTIC = 4
+EXIT_RECOVERY_REQUIRED = 5
 
 # Codes that mean "the tool could not run", as opposed to "the content is wrong".
 ENVIRONMENT_CODES = frozenset((
@@ -88,6 +92,10 @@ def parse_args(argv):
     parser.add_argument("--init-ledger", action="store_true",
                         help="create a new ledger; only for a genuinely new "
                              "pack, never to recover from a lost one")
+    parser.add_argument("--recover", action="store_true",
+                        help="complete an interrupted publication. Idempotent "
+                             "and deterministic; leaves exactly one complete "
+                             "generation and no transaction state.")
     parser.add_argument("--generated-at",
                         help="release tooling only: ISO-8601 stamp recorded in "
                              "QA/handoff metadata. Never enters a runtime asset "
@@ -162,6 +170,19 @@ def main(argv=None):
     if args.check:
         out("mode  : --check (no files are written)")
 
+    if args.recover:
+        result = recover(options, REPO_ROOT)
+        print_findings(result.findings)
+        if result.findings.has_fatal():
+            err("")
+            err("RESULT: RECOVERY FAILED - the pack directory still needs "
+                "manual inspection.")
+            return EXIT_FATAL
+        out("")
+        out("RESULT: OK - exactly one complete generation is present and no "
+            "transaction state remains.")
+        return EXIT_OK
+
     if args.verify_deterministic:
         result, differences = verify_deterministic(options, REPO_ROOT)
         print_findings(result.findings)
@@ -218,9 +239,13 @@ def main(argv=None):
 
 
 def _fatal_exit_code(result):
-    for finding in result.findings:
-        if finding.severity == FATAL and finding.code in ENVIRONMENT_CODES:
-            return EXIT_USAGE
+    codes = {f.code for f in result.findings if f.severity == FATAL}
+    # An unfinished transaction is not a content problem; it needs --recover,
+    # so CI can tell it apart from "the source is wrong".
+    if codes & {"RECOVERY_REQUIRED", "TRANSACTION_JOURNAL_CORRUPT"}:
+        return EXIT_RECOVERY_REQUIRED
+    if codes & ENVIRONMENT_CODES:
+        return EXIT_USAGE
     return EXIT_FATAL
 
 

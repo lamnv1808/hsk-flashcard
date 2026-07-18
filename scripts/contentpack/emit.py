@@ -19,7 +19,7 @@ Two ideas carry most of the weight here.
 import hashlib
 import json
 import os
-import shutil
+import shutil  # noqa: F401  (used by the transaction protocol below)
 
 from . import CSI_VERSION, BUILD_TOOL_VERSION
 from . import schema
@@ -262,70 +262,290 @@ def looks_foreign(target_dir, pack_id):
     return "%s-content-pack.js" % pack_id not in existing
 
 
-def publish(output_dir, pack_id, artifacts, force, findings):
-    """Validate, stage completely, then promote. Never partial.
+# --------------------------------------------------------------------------
+# transactional publication
+# --------------------------------------------------------------------------
+#
+# The ledger and the artifact directory are two separate durable resources, in
+# different parent directories and possibly on different volumes, so no single
+# atomic rename can cover both. Correctness therefore comes from a write-ahead
+# journal plus idempotent roll-forward recovery.
+#
+#   prepare : stage artifacts (fsync) -> stage ledger to <ledger>.txn (fsync)
+#   COMMIT  : write journal (fsync)          <-- the durable commit point
+#   step 1  : rename O -> O.old        (atomic; skipped when O is absent)
+#   step 2  : rename staging -> O      (atomic)
+#   step 3  : os.replace(L.txn, L)     (atomic; skipped for --qa-only)
+#   step 4  : rmtree O.old; remove journal
+#
+# Before the journal is durable nothing has been replaced, so recovery is a
+# discard. After it, every input a later step needs is consumed only by that
+# step, so roll-forward is always possible and never needs the old bytes.
+#
+# Windows notes, measured on NTFS rather than assumed:
+#   - os.replace(dir -> EXISTING dir) raises PermissionError, so the directory
+#     swap needs the two-rename dance above rather than one call.
+#   - os.replace(dir -> ABSENT target) is atomic.
+#   - os.replace(file -> EXISTING file) is atomic.
+#   - a directory rename fails while any file inside it is open.
 
-    Every artifact is written and flushed into a staging directory before any
-    promotion happens, so a failure at any earlier point leaves the previous
-    output byte-unchanged.
-    """
+JOURNAL_VERSION = 1
+LEDGER_STAGE_SUFFIX = ".txn"
+
+
+def _noop_fault(_label):
+    """Default fault hook. Tests replace it to inject failures."""
+    return None
+
+
+def journal_path(output_dir, pack_id):
+    """Journal lives beside the pack directory, on the artifact volume."""
     parent = os.path.dirname(os.path.abspath(output_dir))
-    staging = os.path.join(parent, ".staging-%s" % pack_id)
+    return os.path.join(parent, ".txn-%s.json" % pack_id)
+
+
+def staging_path(output_dir, pack_id):
+    parent = os.path.dirname(os.path.abspath(output_dir))
+    return os.path.join(parent, ".staging-%s" % pack_id)
+
+
+def old_path(output_dir, pack_id):
+    parent = os.path.dirname(os.path.abspath(output_dir))
+    return os.path.join(parent, ".old-%s" % pack_id)
+
+
+def read_journal(output_dir, pack_id):
+    """Return the journal document, or None. A corrupt journal raises."""
+    path = journal_path(output_dir, pack_id)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise ValueError("transaction journal is unreadable or corrupt: %s" % exc)
+    if not isinstance(doc, dict) or doc.get("journalVersion") != JOURNAL_VERSION:
+        raise ValueError("transaction journal has an unsupported shape")
+    return doc
+
+
+def _fsync_dir(path):
+    """Best effort. Windows cannot fsync a directory handle."""
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except (OSError, ValueError):
+        pass
+    finally:
+        os.close(fd)
+
+
+def _sha256_path(path):
+    with open(path, "rb") as fh:
+        return sha256_of(fh.read())
+
+
+def dir_matches(directory, entries):
+    """True when directory holds exactly `entries` with matching checksums."""
+    if not os.path.isdir(directory):
+        return False
+    present = sorted(name for name in os.listdir(directory)
+                     if os.path.isfile(os.path.join(directory, name)))
+    if present != sorted(e["path"] for e in entries):
+        return False
+    for entry in entries:
+        if _sha256_path(os.path.join(directory, entry["path"])) != entry["sha256"]:
+            return False
+    return True
+
+
+def build_plan(output_dir, pack_id, artifacts, ledger_path, ledger_bytes,
+               preserve_existing):
+    """The deterministic journal document for one generation."""
+    entries = [{"path": a.name, "bytes": len(a.data), "sha256": sha256_of(a.data)}
+               for a in artifacts]
+    carried = []
+    if preserve_existing and os.path.isdir(output_dir):
+        expected = {a.name for a in artifacts}
+        for name in sorted(os.listdir(output_dir)):
+            full = os.path.join(output_dir, name)
+            if name not in expected and os.path.isfile(full):
+                carried.append({"path": name,
+                                "bytes": os.path.getsize(full),
+                                "sha256": _sha256_path(full)})
+
+    # txid is the generation hash: deterministic, never random, so a retry after
+    # a failure reproduces the same transaction identity.
+    digest = hashlib.sha256()
+    for entry in sorted(entries + carried, key=lambda e: e["path"]):
+        digest.update(entry["path"].encode("utf-8"))
+        digest.update(entry["sha256"].encode("utf-8"))
+    if ledger_bytes is not None:
+        digest.update(sha256_of(ledger_bytes).encode("utf-8"))
+
+    return {
+        "journalVersion": JOURNAL_VERSION,
+        "txid": digest.hexdigest(),
+        "packId": pack_id,
+        "outputDir": os.path.abspath(output_dir),
+        "stagingDir": staging_path(output_dir, pack_id),
+        "oldDir": old_path(output_dir, pack_id),
+        "ledgerPath": os.path.abspath(ledger_path) if ledger_path else None,
+        "ledgerStagePath": (os.path.abspath(ledger_path) + LEDGER_STAGE_SUFFIX
+                            if ledger_path else None),
+        "ledgerSha256": sha256_of(ledger_bytes) if ledger_bytes is not None else None,
+        "artifacts": sorted(entries + carried, key=lambda e: e["path"]),
+        "generated": sorted(entries, key=lambda e: e["path"]),
+    }
+
+
+def prepare(plan, artifacts, ledger_bytes, carried_from, fault=_noop_fault):
+    """Stage everything durably. Nothing observable changes yet."""
+    staging = plan["stagingDir"]
+    fault("before_staging")
+
+    if os.path.isdir(staging):
+        shutil.rmtree(staging)
+    os.makedirs(staging)
 
     for art in artifacts:
-        if not is_contained(output_dir, art.name):
-            findings.fatal(
-                "OUTPUT_PATH_ESCAPE",
-                "generated artifact '%s' does not resolve inside the output "
-                "directory" % art.name)
-    if findings.has_fatal():
-        return None
+        fault("artifact_write:%s" % art.name)
+        _fsync_write(os.path.join(staging, art.name), art.data)
 
-    if looks_foreign(output_dir, pack_id) and not force:
-        findings.fatal(
-            "FOREIGN_OUTPUT",
-            "output directory contains files this pipeline did not produce; "
-            "pass --force only after inspecting them")
-        return None
+    # --qa-only publishes a partial set, so the untouched files are carried
+    # forward into staging. Without this the directory swap would delete the
+    # data artifacts that this invocation deliberately did not regenerate.
+    generated = {a.name for a in artifacts}
+    for entry in plan["artifacts"]:
+        if entry["path"] in generated:
+            continue
+        shutil.copyfile(os.path.join(carried_from, entry["path"]),
+                        os.path.join(staging, entry["path"]))
 
-    inventory = []
-    try:
-        if os.path.isdir(staging):
-            shutil.rmtree(staging)
-        os.makedirs(staging)
+    _fsync_dir(staging)
 
-        for art in artifacts:
-            _fsync_write(os.path.join(staging, art.name), art.data)
+    fault("before_ledger_stage")
+    if plan["ledgerStagePath"] is not None:
+        fault("ledger_stage")
+        _fsync_write(plan["ledgerStagePath"], ledger_bytes)
 
-        if not os.path.isdir(output_dir):
-            os.makedirs(output_dir)
+    fault("after_fsync")
 
-        expected = {art.name for art in artifacts}
-        obsolete = sorted(
-            name for name in os.listdir(output_dir)
-            if name not in expected and os.path.isfile(os.path.join(output_dir, name)))
 
-        for art in artifacts:
-            os.replace(os.path.join(staging, art.name),
-                       os.path.join(output_dir, art.name))
-            inventory.append({
-                "path": art.name,
-                "bytes": len(art.data),
-                "sha256": sha256_of(art.data),
-            })
+def commit(plan, fault=_noop_fault):
+    """Make the journal durable, then run the roll-forward steps."""
+    path = journal_path(plan["outputDir"], plan["packId"])
+    fault("before_journal")
+    _fsync_write(path, canonical_json_bytes(plan))
+    _fsync_dir(os.path.dirname(path))
+    fault("after_journal")
+    return roll_forward(plan, fault)
 
-        # Cleanup is confined to the pack's own directory and never recursive.
-        for name in obsolete:
-            victim = os.path.join(output_dir, name)
-            if is_contained(output_dir, name) and os.path.isfile(victim):
-                os.remove(victim)
-                findings.info("STALE_OUTPUT_REMOVED",
-                              "removed obsolete generated file '%s'" % name)
-    finally:
-        if os.path.isdir(staging):
-            shutil.rmtree(staging, ignore_errors=True)
 
-    return inventory
+def roll_forward(plan, fault=_noop_fault):
+    """Idempotent completion. Used by commit AND by recovery, unchanged.
+
+    Sharing one implementation is deliberate: a recovery path that differs from
+    the commit path is a recovery path nobody has really tested.
+    """
+    output_dir = plan["outputDir"]
+    staging = plan["stagingDir"]
+    old_dir = plan["oldDir"]
+
+    # steps 1 + 2 -- install the artifact directory
+    if not dir_matches(output_dir, plan["artifacts"]):
+        if not os.path.isdir(staging):
+            raise RuntimeError(
+                "cannot complete transaction %s: staging directory is gone and "
+                "the output directory does not hold the new generation"
+                % plan["txid"][:12])
+        # Staging must be complete and byte-correct before it is allowed to
+        # become the live generation. Without this, a crash midway through the
+        # staging writes would let recovery promote a half-written pack.
+        if not dir_matches(staging, plan["artifacts"]):
+            raise RuntimeError(
+                "cannot complete transaction %s: the staging directory is "
+                "incomplete or does not match the journal checksums"
+                % plan["txid"][:12])
+        fault("before_dir_swap")
+        if os.path.isdir(output_dir):
+            if os.path.isdir(old_dir):
+                shutil.rmtree(old_dir)
+            os.replace(output_dir, old_dir)
+            fault("after_dir_swap_old")
+        os.replace(staging, output_dir)
+        fault("after_dir_swap_new")
+
+    # step 3 -- install the ledger
+    ledger = plan["ledgerPath"]
+    if ledger is not None:
+        needed = plan["ledgerSha256"]
+        current = _sha256_path(ledger) if os.path.isfile(ledger) else None
+        if current != needed:
+            stage = plan["ledgerStagePath"]
+            if not os.path.isfile(stage):
+                raise RuntimeError(
+                    "cannot complete transaction %s: the staged ledger is gone "
+                    "and the live ledger is not the new generation"
+                    % plan["txid"][:12])
+            fault("before_ledger_replace")
+            os.replace(stage, ledger)
+            fault("after_ledger_replace")
+
+    # step 4 -- cleanup; a successful build leaves no marker behind
+    fault("during_cleanup")
+    cleanup(plan)
+    return plan["generated"]
+
+
+def cleanup(plan):
+    """Remove every transaction remnant. Safe to call repeatedly."""
+    if os.path.isdir(plan["oldDir"]):
+        shutil.rmtree(plan["oldDir"], ignore_errors=True)
+    if os.path.isdir(plan["stagingDir"]):
+        shutil.rmtree(plan["stagingDir"], ignore_errors=True)
+    stage = plan["ledgerStagePath"]
+    if stage and os.path.isfile(stage):
+        try:
+            os.remove(stage)
+        except OSError:
+            pass
+    path = journal_path(plan["outputDir"], plan["packId"])
+    if os.path.isfile(path):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
+def abort(plan):
+    """Pre-commit rollback: discard staging, leave the prior generation alone."""
+    if os.path.isdir(plan["stagingDir"]):
+        shutil.rmtree(plan["stagingDir"], ignore_errors=True)
+    stage = plan["ledgerStagePath"]
+    if stage and os.path.isfile(stage):
+        try:
+            os.remove(stage)
+        except OSError:
+            pass
+
+
+def discard_precommit_debris(output_dir, pack_id, findings):
+    """Remove staging/.old left by a failure that never reached the journal.
+
+    Only ever called when no journal exists, which means no step ever ran, so
+    this cannot destroy a committed generation.
+    """
+    for path in (staging_path(output_dir, pack_id), old_path(output_dir, pack_id)):
+        if os.path.isdir(path):
+            shutil.rmtree(path, ignore_errors=True)
+            findings.info(
+                "PRECOMMIT_DEBRIS_REMOVED",
+                "removed '%s' left by an earlier failure that never reached the "
+                "commit point" % os.path.basename(path))
 
 
 def inventory_only(artifacts):
