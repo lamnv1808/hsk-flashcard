@@ -59,6 +59,9 @@ GROUPS = {
     "ContentPack (Phase 10)": [
         "tests/browser/test_content_pack.py",
     ],
+    "Content Pack v1 (Phase 24C)": [
+        "tests/browser/test_content_pack_v1.py",
+    ],
     "Data & contracts": [
         "tests/data/test_card_stability.py",
         "tests/data/test_baseline_comparison.py",

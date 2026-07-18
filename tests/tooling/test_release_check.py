@@ -216,7 +216,7 @@ def main():
         r_swver, r_ok, r_detail, r_count = relmod.sw_inventory()
         check("real sw.js precache verified", r_ok is True)
         check("real sw.js has exactly 36 precache assets", r_count == 36)
-        check("real sw.js cache is v35", r_swver == "hsk-flashcards-v35")
+        check("real sw.js cache is v36", r_swver == "hsk-flashcards-v36")
 
         # === Finding 3: git command failures fail closed ===
         # not a git work tree
