@@ -14,7 +14,7 @@ import os
 
 from . import emit, identity, qa, sources, validate
 from .findings import Findings
-from .locking import LockBusy, LockUnavailable, PackLock
+from .locking import LockBusy, LockPathRejected, LockUnavailable, PackLock
 
 CONTENT_PACK_JS = "%s-content-pack.js"
 CARDS_JS = "%s-cards.js"
@@ -152,14 +152,46 @@ def _generate(options, findings, deterministic_note):
     return result
 
 
+def _locked(pack_id, findings, body):
+    """Run `body` inside the pack's canonical single-writer lock.
+
+    Every caller that reads or writes pack state goes through here, including
+    --check and --verify-deterministic: both read the ledger and the journal,
+    so running them against a live builder would report state that was never
+    simultaneously true.
+    """
+    try:
+        with PackLock(pack_id):
+            return body()
+    except LockBusy as exc:
+        findings.fatal(
+            "BUILD_LOCKED",
+            "%s. Only one build, check or recovery may hold a pack at a time; "
+            "nothing was read, allocated or written." % exc)
+    except LockPathRejected as exc:
+        findings.fatal("LOCK_PATH_REJECTED", str(exc))
+    except LockUnavailable as exc:
+        findings.fatal("LOCK_UNAVAILABLE", str(exc))
+    result = BuildResult()
+    result.findings = findings
+    return result
+
+
 def build(options, repo_root):
     """Full build. Writes only after every stage has succeeded.
 
-    Everything that mutates durable state -- ledger read, id allocation,
-    staging, journal commit, roll-forward, cleanup -- runs inside the pack's
-    single-writer lock. --check never takes the lock, because taking one would
-    create a file and break its no-write guarantee; it is read-only and may
-    therefore observe a concurrent build mid-flight.
+    Everything that depends on pack identity or state -- the recovery-state
+    decision, the ledger read, source validation that influences allocation, id
+    allocation, staging, journal commit, roll-forward and cleanup -- runs inside
+    the pack's canonical single-writer lock, and the lock is held until the
+    transaction has either fully committed or left a documented recoverable
+    state.
+
+    --check also takes the lock. It mutates no content state, but it reads the
+    ledger and the journal, and an unlocked reader can only report a snapshot
+    that may never have been simultaneously true. Acquiring the lock may create
+    the persistent canonical lock file; that is lock infrastructure, not content
+    state, and it is documented rather than hidden behind a weaker lock.
     """
     findings = Findings()
 
@@ -171,25 +203,8 @@ def build(options, repo_root):
         result.findings = findings
         return result
 
-    if options.check:
-        return _build_unlocked(options, output_dir, findings)
-
-    try:
-        with PackLock(output_dir, options.pack_id):
-            return _build_unlocked(options, output_dir, findings)
-    except LockBusy as exc:
-        findings.fatal(
-            "BUILD_LOCKED",
-            "%s. Only one build or recovery may mutate a pack at a time; "
-            "nothing was read, allocated or written." % exc)
-        result = BuildResult()
-        result.findings = findings
-        return result
-    except LockUnavailable as exc:
-        findings.fatal("LOCK_UNAVAILABLE", str(exc))
-        result = BuildResult()
-        result.findings = findings
-        return result
+    return _locked(options.pack_id, findings,
+                   lambda: _build_unlocked(options, output_dir, findings))
 
 
 def _build_unlocked(options, output_dir, findings):
@@ -317,18 +332,9 @@ def recover(options, repo_root):
         findings.fatal("OUTPUT_PATH_ESCAPE", str(exc))
         return result
 
-    try:
-        with PackLock(output_dir, options.pack_id):
-            return _recover_unlocked(options, output_dir, findings, result)
-    except LockBusy as exc:
-        findings.fatal(
-            "BUILD_LOCKED",
-            "%s. Recovery must not run against a live builder; nothing was "
-            "inspected or changed." % exc)
-        return result
-    except LockUnavailable as exc:
-        findings.fatal("LOCK_UNAVAILABLE", str(exc))
-        return result
+    return _locked(
+        options.pack_id, findings,
+        lambda: _recover_unlocked(options, output_dir, findings, result))
 
 
 def _recover_unlocked(options, output_dir, findings, result):
@@ -378,8 +384,19 @@ def verify_deterministic(options, repo_root):
 
     Two independent full passes (parse, validate, normalize, allocate, emit)
     catch ordering nondeterminism anywhere in the chain, not just in the
-    serializer.
+    serializer. Both passes read the ledger, so this runs under the same
+    canonical lock -- comparing two builds against a ledger that moved
+    underneath them would prove nothing.
     """
+    findings = Findings()
+    outcome = _locked(options.pack_id, findings,
+                      lambda: _verify_unlocked(options))
+    if isinstance(outcome, tuple):
+        return outcome
+    return outcome, []
+
+
+def _verify_unlocked(options):
     first = _generate(options, Findings(), deterministic_note="verified")
     if first.findings.has_fatal():
         return first, []

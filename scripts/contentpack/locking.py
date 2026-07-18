@@ -1,34 +1,44 @@
-"""Cross-process, per-pack single-writer lock.
+"""Canonical, persistent, cross-process per-pack single-writer lock.
 
-A journal-presence check is not a lock. Two builders can both read the journal
-path, both see nothing, both read the same ledger, both allocate the same ids,
-both write into the same staging directory, and then race to create the journal
--- with the loser's staged bytes published under the winner's transaction. This
-module closes that window.
+Two review findings shaped this module. Both were real defects in the previous
+implementation, and both are worth stating plainly so the design is not undone
+later by someone who thinks it looks over-engineered.
 
-Design constraints and the reasoning behind each:
+FINDING 1 -- deleting the lock file permits POSIX split-brain.
+    The previous release() unlinked the lock pathname. On POSIX that is unsafe
+    even with an identity check on acquire:
 
-  - Kernel-backed, never advisory-by-convention. Ownership comes from a byte
-    range lock held by the OS on an open handle: msvcrt.locking on Windows,
-    fcntl.flock on POSIX. Both are released automatically when the process
-    exits or crashes, which is precisely the property a stale marker file
-    cannot provide.
+        1. A unlocks (still holding its descriptor)
+        2. B opens and locks the SAME inode, and its identity check passes,
+           because the pathname still resolves to that inode
+        3. A unlinks the pathname
+        4. C creates a NEW file at the pathname and locks the new inode
+        5. B and C both believe they exclusively own the pack
 
-  - Existence is never ownership. The lock FILE may legitimately exist while
-    nobody holds it, so this module never infers ownership from the path and
-    never deletes a lock because it "looks old". A competitor is detected only
-    by the kernel refusing the lock.
+    No check on the acquire side closes that window, because B was correct at
+    the moment it looked. The only fix is to never unlink. The lock file is
+    therefore PERSISTENT: it is never removed on release, on failure, during
+    recovery, or during cleanup. Its existence carries NO meaning. Ownership is
+    represented solely by the live kernel lock.
 
-  - Per pack. The path is <packId>-scoped, so different packs never contend.
+FINDING 2 -- output-relative lock paths do not protect pack identity.
+    A lock under <output parent>/.lock-<packId> let two processes with the same
+    packId but different --output roots take DIFFERENT locks while still
+    mutating the same id ledger. Lock identity must be a property of the pack,
+    not of the invocation, so the path is canonical and independent of --output,
+    --source, --ledger, the source format, the CWD and any temp directory.
 
-  - Non-blocking. A competitor fails fast and loudly rather than queueing, so
-    CI surfaces contention instead of hiding it behind a timeout.
-
-  - Standard library only.
+Kernel primitives (standard library only):
+    Windows -- msvcrt.locking(LK_NBLCK)
+    POSIX   -- fcntl.flock(LOCK_EX | LOCK_NB)
+Both are released automatically when the owning process exits or crashes, which
+is the property no marker file can provide.
 """
 
 import errno
 import os
+
+from .schema import IDENT_RE
 
 if os.name == "nt":                                    # pragma: no cover
     import msvcrt
@@ -42,8 +52,10 @@ else:                                                  # pragma: no cover
         _HAVE_FCNTL = False
     _HAVE_MSVCRT = False
 
-# Bounded retry for the unlink race described in _acquire_fd.
-_IDENTITY_RETRIES = 5
+# Canonical namespace, relative to the repository root. It sits inside the
+# gitignored build area, so the persistent lock files are never committed.
+LOCK_ROOT_PARTS = ("build", "content-packs", ".locks")
+LOCK_SUFFIX = ".lock"
 
 
 class LockBusy(Exception):
@@ -54,14 +66,48 @@ class LockUnavailable(Exception):
     """No kernel locking primitive is available on this interpreter."""
 
 
-def lock_path(output_dir, pack_id):
-    """Beside the pack directory, on the artifact volume."""
-    parent = os.path.dirname(os.path.abspath(output_dir))
-    return os.path.join(parent, ".lock-%s" % pack_id)
+class LockPathRejected(Exception):
+    """The pack id does not resolve to a safe canonical lock path."""
+
+
+def repo_root():
+    """Repository root, derived from this module's trusted location.
+
+    Deliberately NOT from the CWD, an argument, or an environment variable:
+    the whole point of a canonical lock is that no invocation detail can move
+    it. locking.py lives at <repo>/scripts/contentpack/locking.py.
+    """
+    here = os.path.abspath(__file__)
+    return os.path.dirname(os.path.dirname(os.path.dirname(here)))
+
+
+def lock_root():
+    return os.path.join(repo_root(), *LOCK_ROOT_PARTS)
+
+
+def canonical_lock_path(pack_id):
+    """The one lock path for a pack id. Same id in, same path out, always."""
+    if not isinstance(pack_id, str) or not IDENT_RE.match(pack_id):
+        raise LockPathRejected(
+            "pack id %r is not a valid identifier; refusing to build a lock "
+            "path from it" % (pack_id,))
+
+    root = lock_root()
+    candidate = os.path.join(root, pack_id + LOCK_SUFFIX)
+
+    # Containment, defence in depth. IDENT_RE already excludes separators, dots
+    # and '..', so this cannot currently fail -- which is exactly why it is
+    # cheap to keep, and why it must not be removed if IDENT_RE ever loosens.
+    real_root = os.path.realpath(root)
+    real_candidate = os.path.realpath(candidate)
+    if os.path.dirname(real_candidate) != real_root:
+        raise LockPathRejected(
+            "lock path for pack %r escapes the canonical lock root" % (pack_id,))
+    return candidate
 
 
 def _try_lock(fd):
-    """Take an exclusive, non-blocking byte-range lock. False when contended."""
+    """Exclusive, non-blocking, kernel-backed. False when another owner exists."""
     if _HAVE_MSVCRT:
         try:
             os.lseek(fd, 0, os.SEEK_SET)
@@ -98,68 +144,50 @@ def _unlock(fd):
             pass
 
 
-def _same_file(fd, path):
-    """True when the locked handle still refers to the live lock path.
-
-    Closes the classic unlink race: if the owner deletes the lock file between
-    our open() and our lock(), we could end up holding a lock on an orphaned
-    inode while a third process locks a freshly created one. Comparing the
-    handle's identity against the path's catches that.
-    """
-    try:
-        a = os.fstat(fd)
-        b = os.stat(path)
-    except OSError:
-        return False
-    return (a.st_ino, a.st_dev) == (b.st_ino, b.st_dev)
-
-
 class PackLock(object):
-    """Single-writer boundary for one pack. Use as a context manager."""
+    """Single-writer boundary for one pack id. Use as a context manager.
 
-    def __init__(self, output_dir, pack_id):
-        self.path = lock_path(output_dir, pack_id)
+    The lock file is created on first use and then kept forever. An existing
+    but unlocked file never blocks anything -- it is reused as-is.
+    """
+
+    def __init__(self, pack_id):
         self.pack_id = pack_id
+        self.path = canonical_lock_path(pack_id)
         self._fd = None
 
     def acquire(self):
         parent = os.path.dirname(self.path)
-        if parent and not os.path.isdir(parent):
-            os.makedirs(parent)
+        if not os.path.isdir(parent):
+            os.makedirs(parent, exist_ok=True)
 
-        last = None
-        for _ in range(_IDENTITY_RETRIES):
-            fd = os.open(self.path, os.O_CREAT | os.O_RDWR)
-            try:
-                # msvcrt locks a byte range, so the file needs at least one
-                # byte to lock. The content is irrelevant and never read.
-                if os.fstat(fd).st_size == 0:
-                    os.write(fd, b"\0")
-                if not _try_lock(fd):
-                    os.close(fd)
-                    raise LockBusy(
-                        "another process is building or recovering pack '%s'"
-                        % self.pack_id)
-                if _same_file(fd, self.path):
-                    self._fd = fd
-                    return self
-                # The file was replaced under us; drop it and try again.
-                _unlock(fd)
+        # O_CREAT without O_EXCL: reusing an existing lock file is the normal,
+        # expected case. The file is a rendezvous point, not a claim.
+        fd = os.open(self.path, os.O_CREAT | os.O_RDWR)
+        try:
+            # msvcrt locks a byte range, so there must be a byte to lock. The
+            # content is never read and carries no meaning.
+            if os.fstat(fd).st_size == 0:
+                os.write(fd, b"\0")
+            if not _try_lock(fd):
                 os.close(fd)
-                last = "lock file was replaced during acquisition"
-            except LockBusy:
-                raise
+                raise LockBusy(
+                    "another process is building or recovering pack '%s'"
+                    % self.pack_id)
+        except LockBusy:
+            raise
+        except BaseException:
+            try:
+                os.close(fd)
             except OSError:
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
-                raise
-        raise LockBusy(
-            "could not obtain a stable lock for pack '%s' (%s)"
-            % (self.pack_id, last))
+                pass
+            raise
+
+        self._fd = fd
+        return self
 
     def release(self):
+        """Unlock and close. NEVER unlink -- see FINDING 1 in the module docstring."""
         if self._fd is None:
             return
         fd, self._fd = self._fd, None
@@ -167,18 +195,6 @@ class PackLock(object):
         try:
             os.close(fd)
         except OSError:
-            pass
-        # Unlink only after closing: Windows refuses to delete a file that any
-        # handle -- including our own -- still holds open. The window this
-        # opens (a competitor locking the inode we just unlinked) is closed on
-        # the acquire side by _same_file(), which rejects a handle that no
-        # longer refers to the live path.
-        try:
-            os.remove(self.path)
-        except OSError:
-            # A competitor already has it open, or the platform refuses. Both
-            # are harmless: the file carries no state, and ownership is never
-            # inferred from its existence.
             pass
 
     def __enter__(self):

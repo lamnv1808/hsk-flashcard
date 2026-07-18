@@ -21,7 +21,7 @@ human-authored content, never a generator.
 ```
 scripts/build_content_pack.py      CLI, exit codes, ASCII-safe console output
 scripts/contentpack/
-    locking.py     cross-process, per-pack, kernel-backed single-writer lock
+    locking.py     canonical persistent per-pack kernel-backed single-writer lock
     __init__.py    build-tool + CSI + ledger version constants
     findings.py    three severity classes, coordinates, accumulation
     normalize.py   Unicode policy (display-affecting vs comparison-only)
@@ -302,7 +302,7 @@ data artifacts it did not regenerate. `--qa-only` therefore carries the untouche
 into staging, and the journal records the full resulting set. Verified: the three data artifacts
 stay byte-identical and the ledger is untouched.
 
-### Single-writer concurrency (review follow-up 2)
+### Single-writer concurrency (review follow-ups 2 and 3)
 
 The journal made a *single* builder crash-safe, but **a journal-presence check is not a lock**.
 Two processes could both read the journal path, both see nothing, both read the same ledger, both
@@ -310,34 +310,89 @@ allocate the **same ids**, both write into the **same** `.staging-<packId>` dire
 to create the journal — with the loser's staged bytes published under the winner's record. The
 failure window spanned the entire preparation phase.
 
-`scripts/contentpack/locking.py` adds a **kernel-backed, per-pack, non-blocking** lock:
+Follow-up 2 introduced a kernel-backed lock. Review then found two further defects in it, both
+release-blocking, both real:
+
+**Defect A — unlinking the lock file permits POSIX split-brain.** Release used to unlink the lock
+pathname, guarded by an identity check on acquire. That check does not close the window:
+
+1. A unlocks (still holding its descriptor).
+2. B opens and locks the **same inode**; B's identity check passes, because the pathname still
+   resolves to that inode.
+3. A unlinks the pathname.
+4. C creates a **new** file at that pathname and locks the new inode.
+5. B and C both believe they exclusively own the pack.
+
+B was correct at the moment it looked, so no acquire-side check can help. The fix is structural:
+**the lock file is persistent and is never unlinked** — not on release, not on failure, not during
+recovery, not during cleanup. Its existence carries **no** meaning; ownership is represented solely
+by the live kernel lock, so an existing but unlocked file never blocks a build and is simply reused.
+
+**Defect B — output-relative lock paths do not protect pack identity.** A lock at
+`<output parent>/.lock-<packId>` let two processes with the same `packId` but different `--output`
+roots take **different** locks while still mutating the same id ledger. Lock identity must be a
+property of the pack, not of the invocation.
+
+### Canonical lock
+
+```
+<repo-root>/build/content-packs/.locks/<packId>.lock
+```
 
 | Property | How |
 |---|---|
+| Repo root | derived from `locking.py.__file__` (three `dirname`s) — never CWD, argument or environment |
+| Independent of invocation | unaffected by `--output`, `--source`, `--ledger`, source format, CWD or temp dir |
+| `packId` validated first | must match ContentPack's `IDENT_RE` before any path is constructed; malformed ids raise `LOCK_PATH_REJECTED` |
+| Containment | `realpath` of the final path must sit **directly** inside `realpath(lock_root())` |
+| Deterministic | same id ⇒ same path, always; different ids ⇒ different files |
+| Persistent | created on first use, then kept forever; **never unlinked by production code** |
+| Existence ≠ ownership | an unlocked file never blocks; a lock is never removed for being "old" |
 | Kernel-backed | `msvcrt.locking(LK_NBLCK)` on Windows, `fcntl.flock(LOCK_EX\|LOCK_NB)` on POSIX |
-| Released on crash | ownership lives on an open handle, so the OS drops it when the process dies |
-| Existence ≠ ownership | the lock *file* may exist unowned; contention is detected only by the kernel refusing the lock, and a lock is **never** deleted for being "old" |
-| Per pack | path is `<out parent>/.lock-<packId>`, so different packs never contend |
+| Crash-safe | ownership lives on an open handle, so the OS drops it when the process dies |
 | Fail fast | a competitor gets `BUILD_LOCKED` and **exit 6**, machine-distinct from every other outcome |
-| Unlink race closed | after acquiring, `_same_file()` compares the handle's `(st_ino, st_dev)` against the live path and rejects a handle to an unlinked inode |
 
-Scope of the critical section: **lock → ledger read → parse/validate → id allocation → staging →
-journal commit → roll-forward → cleanup → release.** `--recover` takes the *same* lock, because
-recovery renames the output directory and removes staging — running it against a live builder would
-be strictly worse than not running it.
+The locks directory lives inside the gitignored `build/content-packs/` tree, so persistent lock
+files are never committed.
 
-`--check` deliberately does **not** take the lock: acquiring one would create a file and break its
-no-write guarantee. It is read-only, so it cannot corrupt anything; the documented consequence is
-that it may observe a concurrent build mid-flight and report transient drift.
+### Critical-section boundary
 
-**Journal exclusivity:** the journal is now created with `O_CREAT|O_EXCL`, so it can never silently
-overwrite another transaction's record (`JOURNAL_EXISTS`, exit 5). Under the lock this is
-unreachable — it is defence in depth, because the cost of being wrong is publishing one
-transaction's staged bytes under another's journal.
+The lock is acquired **before** anything that depends on pack identity or state, and held until the
+transaction has either fully committed and cleaned up, or failed leaving the documented recoverable
+state:
 
-On release the lock file is unlinked **after** unlocking and closing, because Windows refuses to
-delete a file any handle still holds open. If a competitor already has it open the unlink is skipped;
-that is harmless, since the file carries no state and ownership is never inferred from it.
+`lock → journal-presence / recovery-state decision → ledger read → parse & validation →
+id allocation → staging → journal commit → artifact promotion → ledger replacement →
+obsolete-output cleanup → transaction cleanup → release`
+
+`--recover` takes the **same canonical lock** — it renames the output directory and removes staging,
+so running it against a live builder would be strictly worse than not running it.
+
+`--check` and `--verify-deterministic` also take it. They mutate no content state, but both read the
+ledger and the journal, and an unlocked reader can only report a snapshot that may never have been
+simultaneously true.
+
+### Honest `--check` semantics
+
+`--check` performs **no content-state mutation**:
+
+- no ledger mutation
+- no generated artifact mutation
+- no QA report mutation
+- no runtime asset mutation
+- no source mutation
+
+It is **not** literally zero filesystem writes: acquiring the canonical lock may create the
+persistent lock file the first time a pack is ever touched. That is lock infrastructure, not content
+state. The wording was corrected rather than weakening the lock to preserve an inaccurate claim.
+
+### Journal exclusivity (unchanged)
+
+The journal is created with `O_CREAT|O_EXCL`, so it can never silently overwrite another
+transaction's record (`JOURNAL_EXISTS`, exit 5). Under the lock this is unreachable — it is defence
+in depth, because the cost of being wrong is publishing one transaction's staged bytes under
+another's journal. Checksum-guarded idempotent roll-forward, the refusal to promote incomplete
+staging, and "no id consumed by failed pre-commit work" are all unchanged.
 
 ### Durability — honest platform limits
 
@@ -494,7 +549,7 @@ initial phase commit, `test_pack_build_transaction.py` in review follow-up 1, an
 | `test_pack_build_safety.py` | `</script` + U+2028/U+2029 escaping, wrapper ownership, full Unicode policy, containment (9 rejected forms), app-directory block, foreign/stale output, failure atomicity, orphan temp files, `--check` no-write (tree snapshots), all five exit codes, ASCII-only output, source hygiene greps |
 | `test_pack_build_qa.py` | report shape, completeness metrics, markdown form, full duplicate taxonomy incl. polysemy staying non-fatal, provenance launch gate both ways, handoff schema, severity counts, coordinates |
 | `test_pack_build_transaction.py` | failure injection at 15 durable boundaries, pre/post-commit invariants, blocked builds, recovery, retry determinism, id-consumption, incomplete staging, corrupt journal, pre-commit debris, `--check` no-write under stale state, `--qa-only` preservation |
-| `test_pack_build_concurrency.py` | real subprocesses + real kernel locks: competitor gets `BUILD_LOCKED` and writes nothing, retry byte-identical, different pack ids proceed independently, `--recover` refused under a live lock, kill releases ownership, recovery after a terminated post-journal process with no id burn, `O_EXCL` journal squatter refused, genuine two-CLI race, `--check`/`--qa-only` unchanged, path with spaces, source hygiene |
+| `test_pack_build_concurrency.py` | real subprocesses + real kernel locks: canonical path derivation/containment and 14 malformed pack ids rejected; persistent lock file with the same inode reused across processes and CWDs; static proof that production never unlinks a lock; pre-existing unlocked file does not block; competitor gets `BUILD_LOCKED` and changes nothing; same pack contends across different `--output`, different `--source` and a `--ledger` override with no alternative namespace; different pack ids build concurrently; `--recover` and `--check` refused under a live lock; kill releases ownership and the file persists; recovery after a terminated post-journal process with no id burn; `O_EXCL` journal squatter refused; two-CLI race converging on one generation; `--qa-only` preservation; path with spaces; source hygiene |
 | `test_pack_build_hsk_conformance.py` | 5,002-card reproduction, ids/order/decks/counts/fields, rebuild stability at real scale, production byte-unchanged, the U+200C finding |
 
 **Deliberate convention change:** a missing `openpyxl` **fails** these suites rather than being
@@ -566,9 +621,10 @@ no Supabase rollback, no redeploy and no cache purge are required.
 3. **Multi-line card content is unsupported** — embedded newlines are fatal. If a future pack needs
    multi-paragraph fields, the policy needs an explicit, reviewed extension.
 4. **No cross-pack overlap enforcement** — single-pack range validation only, by design; Phase 24E.
-5. **`--check` is lock-free by design.** Taking a lock would create a file and break its no-write
-   guarantee, so a `--check` run concurrent with a build may observe mid-flight state and report
-   transient drift. Re-run it once the build finishes.
+5. **`--check` serializes against builds.** It takes the canonical lock so it cannot report a
+   snapshot that was never simultaneously true, which means a `--check` run during a build returns
+   `BUILD_LOCKED` rather than a stale answer. It may also create the persistent lock file on first
+   use — see the honest `--check` semantics above.
 6. **Directory-entry `fsync` is unavailable on Windows** (measured). Recoverability is preserved
    through the fsync'd journal and idempotent roll-forward, but this code cannot and does not claim
    stronger directory durability than NTFS metadata journaling provides.
@@ -614,3 +670,23 @@ no Supabase rollback, no redeploy and no cache purge are required.
   `scripts/release_check.py` and its pinned v36 assertion untouched.
 - No new dependency: `msvcrt`, `fcntl`, `os`, `errno` are all standard library.
 - No `shell=True`, no network, no Supabase, no real user data.
+
+---
+
+## Review follow-up 3 — scope confirmations
+
+- **Both findings were real**, not theoretical: production release unlinked the lock file (POSIX
+  split-brain), and lock identity was derived from `--output` (same pack, two locks, one ledger).
+- **Production never unlinks a lock file.** Asserted statically by the concurrency suite: `os.remove`,
+  `os.unlink` and `shutil.rmtree` do not appear in `locking.py`.
+- **`emit.py` was not modified.** The journal contract — `O_CREAT|O_EXCL`, `JOURNAL_EXISTS`,
+  checksum-guarded idempotent roll-forward, never promoting incomplete staging, never touching a
+  foreign journal, no id consumed by failed pre-commit work — is unchanged.
+- **Card 1303** remains deferred to **Phase 24F**; `data.js`, the workbook, the card and the legacy
+  importer are unmodified.
+- **`IDENT_RE` / the two-character `jp` issue** remains deferred; `jlpt` is unaffected.
+- **Phase 24E was not started.**
+- **No service-worker change.** `hsk-flashcards-v36`, exactly 36 precache assets;
+  `scripts/release_check.py` untouched.
+- Standard library only: `msvcrt`, `fcntl`, `os`, `errno`. No new dependency, no `shell=True`, no
+  network, no Supabase, no real user data.
