@@ -15,6 +15,7 @@ Exit codes:
     3  --check found drift between the source and the committed output
     4  --verify-deterministic found a byte difference between two builds
     5  an incomplete publication transaction is present; run --recover
+    6  another process holds this pack's single-writer lock (BUILD_LOCKED)
 
 Console output is ASCII-only so a Windows cp1252 console cannot crash a build.
 Non-ASCII content appears only inside the UTF-8 artifacts.
@@ -40,6 +41,7 @@ EXIT_USAGE = 2
 EXIT_DRIFT = 3
 EXIT_NONDETERMINISTIC = 4
 EXIT_RECOVERY_REQUIRED = 5
+EXIT_LOCKED = 6
 
 # Codes that mean "the tool could not run", as opposed to "the content is wrong".
 ENVIRONMENT_CODES = frozenset((
@@ -177,7 +179,7 @@ def main(argv=None):
             err("")
             err("RESULT: RECOVERY FAILED - the pack directory still needs "
                 "manual inspection.")
-            return EXIT_FATAL
+            return _fatal_exit_code(result)
         out("")
         out("RESULT: OK - exactly one complete generation is present and no "
             "transaction state remains.")
@@ -240,9 +242,14 @@ def main(argv=None):
 
 def _fatal_exit_code(result):
     codes = {f.code for f in result.findings if f.severity == FATAL}
+    # Contention is machine-distinct from every other outcome: the right
+    # response is "retry later", not "fix the source" or "run recovery".
+    if "BUILD_LOCKED" in codes:
+        return EXIT_LOCKED
     # An unfinished transaction is not a content problem; it needs --recover,
     # so CI can tell it apart from "the source is wrong".
-    if codes & {"RECOVERY_REQUIRED", "TRANSACTION_JOURNAL_CORRUPT"}:
+    if codes & {"RECOVERY_REQUIRED", "TRANSACTION_JOURNAL_CORRUPT",
+                "JOURNAL_EXISTS"}:
         return EXIT_RECOVERY_REQUIRED
     if codes & ENVIRONMENT_CODES:
         return EXIT_USAGE

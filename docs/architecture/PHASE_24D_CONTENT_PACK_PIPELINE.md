@@ -21,6 +21,7 @@ human-authored content, never a generator.
 ```
 scripts/build_content_pack.py      CLI, exit codes, ASCII-safe console output
 scripts/contentpack/
+    locking.py     cross-process, per-pack, kernel-backed single-writer lock
     __init__.py    build-tool + CSI + ledger version constants
     findings.py    three severity classes, coordinates, accumulation
     normalize.py   Unicode policy (display-affecting vs comparison-only)
@@ -301,6 +302,61 @@ data artifacts it did not regenerate. `--qa-only` therefore carries the untouche
 into staging, and the journal records the full resulting set. Verified: the three data artifacts
 stay byte-identical and the ledger is untouched.
 
+### Single-writer concurrency (review follow-up 2)
+
+The journal made a *single* builder crash-safe, but **a journal-presence check is not a lock**.
+Two processes could both read the journal path, both see nothing, both read the same ledger, both
+allocate the **same ids**, both write into the **same** `.staging-<packId>` directory, and then race
+to create the journal — with the loser's staged bytes published under the winner's record. The
+failure window spanned the entire preparation phase.
+
+`scripts/contentpack/locking.py` adds a **kernel-backed, per-pack, non-blocking** lock:
+
+| Property | How |
+|---|---|
+| Kernel-backed | `msvcrt.locking(LK_NBLCK)` on Windows, `fcntl.flock(LOCK_EX\|LOCK_NB)` on POSIX |
+| Released on crash | ownership lives on an open handle, so the OS drops it when the process dies |
+| Existence ≠ ownership | the lock *file* may exist unowned; contention is detected only by the kernel refusing the lock, and a lock is **never** deleted for being "old" |
+| Per pack | path is `<out parent>/.lock-<packId>`, so different packs never contend |
+| Fail fast | a competitor gets `BUILD_LOCKED` and **exit 6**, machine-distinct from every other outcome |
+| Unlink race closed | after acquiring, `_same_file()` compares the handle's `(st_ino, st_dev)` against the live path and rejects a handle to an unlinked inode |
+
+Scope of the critical section: **lock → ledger read → parse/validate → id allocation → staging →
+journal commit → roll-forward → cleanup → release.** `--recover` takes the *same* lock, because
+recovery renames the output directory and removes staging — running it against a live builder would
+be strictly worse than not running it.
+
+`--check` deliberately does **not** take the lock: acquiring one would create a file and break its
+no-write guarantee. It is read-only, so it cannot corrupt anything; the documented consequence is
+that it may observe a concurrent build mid-flight and report transient drift.
+
+**Journal exclusivity:** the journal is now created with `O_CREAT|O_EXCL`, so it can never silently
+overwrite another transaction's record (`JOURNAL_EXISTS`, exit 5). Under the lock this is
+unreachable — it is defence in depth, because the cost of being wrong is publishing one
+transaction's staged bytes under another's journal.
+
+On release the lock file is unlinked **after** unlocking and closing, because Windows refuses to
+delete a file any handle still holds open. If a competitor already has it open the unlink is skipped;
+that is harmless, since the file carries no state and ownership is never inferred from it.
+
+### Durability — honest platform limits
+
+| Point | Guarantee |
+|---|---|
+| Journal creation | file `fsync` before any rename; parent-directory `fsync` attempted |
+| Staging writes | per-file `fsync`; staging directory `fsync` attempted |
+| Ledger txn replacement | file `fsync` before `os.replace` |
+| Staging/output renames, old-output cleanup | directory-entry durability is the filesystem's |
+
+**Measured limitation, not assumed:** on Windows the standard library cannot flush a directory
+handle — `os.open(dir, O_RDONLY)` + `os.fsync` raises `PermissionError`. `_fsync_dir()` therefore
+returns `False` there and directory-entry durability comes from NTFS metadata journaling, which this
+code cannot request and does not claim. On POSIX the parent-directory `fsync` does run.
+
+Logical recoverability does not depend on that gap: the **journal file itself is fsync'd before any
+rename**, and roll-forward is checksum-driven and idempotent, so a torn directory entry is resolved
+by re-running `--recover` rather than by trusting the rename to have landed.
+
 ### Containment (unchanged)
 
 Every artifact name is containment-checked against the output root using the rules proven in
@@ -358,6 +414,9 @@ python scripts/build_content_pack.py --pack <packId> [options]
 `--source --output --ledger --check --verify-deterministic --qa-only --force
 --allow-removals --init-ledger --recover --generated-at`
 
+Every mutating invocation (build, `--qa-only`, `--recover`) takes the pack's single-writer lock.
+`--check` and `--verify-deterministic` are read-only and deliberately lock-free.
+
 | Exit | Meaning |
 |---|---|
 | 0 | success |
@@ -366,6 +425,7 @@ python scripts/build_content_pack.py --pack <packId> [options]
 | 3 | `--check` drift |
 | 4 | `--verify-deterministic` byte difference |
 | 5 | incomplete publication transaction present; run `--recover` |
+| 6 | another process holds this pack's single-writer lock (`BUILD_LOCKED`) |
 
 Exit 5 is separate from 1 on purpose: an unfinished transaction is not a content problem, and CI
 must be able to tell "run recovery" apart from "the source is wrong".
@@ -422,8 +482,9 @@ untouched here.
 
 ## Tests
 
-**43/43** (36 existing preserved unchanged, no assertion removed or weakened; 7 added — 6 in the
-initial phase commit, plus `test_pack_build_transaction.py` in the review follow-up).
+**44/44** (36 existing preserved unchanged, no assertion removed or weakened; 8 added — 6 in the
+initial phase commit, `test_pack_build_transaction.py` in review follow-up 1, and
+`test_pack_build_concurrency.py` in review follow-up 2).
 
 | Suite | Covers |
 |---|---|
@@ -433,6 +494,7 @@ initial phase commit, plus `test_pack_build_transaction.py` in the review follow
 | `test_pack_build_safety.py` | `</script` + U+2028/U+2029 escaping, wrapper ownership, full Unicode policy, containment (9 rejected forms), app-directory block, foreign/stale output, failure atomicity, orphan temp files, `--check` no-write (tree snapshots), all five exit codes, ASCII-only output, source hygiene greps |
 | `test_pack_build_qa.py` | report shape, completeness metrics, markdown form, full duplicate taxonomy incl. polysemy staying non-fatal, provenance launch gate both ways, handoff schema, severity counts, coordinates |
 | `test_pack_build_transaction.py` | failure injection at 15 durable boundaries, pre/post-commit invariants, blocked builds, recovery, retry determinism, id-consumption, incomplete staging, corrupt journal, pre-commit debris, `--check` no-write under stale state, `--qa-only` preservation |
+| `test_pack_build_concurrency.py` | real subprocesses + real kernel locks: competitor gets `BUILD_LOCKED` and writes nothing, retry byte-identical, different pack ids proceed independently, `--recover` refused under a live lock, kill releases ownership, recovery after a terminated post-journal process with no id burn, `O_EXCL` journal squatter refused, genuine two-CLI race, `--check`/`--qa-only` unchanged, path with spaces, source hygiene |
 | `test_pack_build_hsk_conformance.py` | 5,002-card reproduction, ids/order/decks/counts/fields, rebuild stability at real scale, production byte-unchanged, the U+200C finding |
 
 **Deliberate convention change:** a missing `openpyxl` **fails** these suites rather than being
@@ -485,10 +547,11 @@ Delete `build/content-packs/` if present — it is referenced by no runtime asse
 runtime effect. Authored sources and any ledger are preserved; discarding a ledger would be the one
 genuinely destructive act available here.
 
-The phase is two commits: `e829247` (pipeline) and the transactional-publication follow-up.
-`git revert` the follow-up alone restores the pre-transaction publish behaviour and **36 + 6 =
-42/42**; reverting both returns to **36/36**. Reverting only the follow-up reintroduces the
-two-write defect, so it is not recommended.
+The phase is three commits: `e829247` (pipeline), `a4bcb35` (transactional publication) and the
+single-writer concurrency follow-up. Reverting the concurrency commit alone returns to **43/43** and
+removes the cross-process guarantee; reverting it and `a4bcb35` returns to **42/42** and reinstates
+the split-write defect; reverting all three returns to **36/36**. Partial reverts reintroduce known
+defects and are not recommended.
 
 Expected suite count after full rollback: **36/36**. Regression: `python tests/run_regression.py`.
 Release check: `python scripts/release_check.py` → 9/9, `hsk-flashcards-v36`, 36 precache assets —
@@ -503,17 +566,23 @@ no Supabase rollback, no redeploy and no cache purge are required.
 3. **Multi-line card content is unsupported** — embedded newlines are fatal. If a future pack needs
    multi-paragraph fields, the policy needs an explicit, reviewed extension.
 4. **No cross-pack overlap enforcement** — single-pack range validation only, by design; Phase 24E.
-5. **Recovery is explicit, not automatic.** A crash after the commit point leaves a journal that
+5. **`--check` is lock-free by design.** Taking a lock would create a file and break its no-write
+   guarantee, so a `--check` run concurrent with a build may observe mid-flight state and report
+   transient drift. Re-run it once the build finishes.
+6. **Directory-entry `fsync` is unavailable on Windows** (measured). Recoverability is preserved
+   through the fsync'd journal and idempotent roll-forward, but this code cannot and does not claim
+   stronger directory durability than NTFS metadata journaling provides.
+7. **Recovery is explicit, not automatic.** A crash after the commit point leaves a journal that
    *blocks* further builds until `--recover` runs. This is deliberate — silently rolling forward
    during an unrelated build would hide that a publication was interrupted — but it does mean an
    operator step is required after a crash.
-6. **The journal lives on the artifact volume.** If the ledger volume becomes unavailable between
+8. **The journal lives on the artifact volume.** If the ledger volume becomes unavailable between
    the commit point and step 3, recovery fails closed with `RECOVERY_FAILED` and must be re-run once
    the volume returns. It never invents a ledger.
-7. **`IDENT_RE` cannot match a 2-character id** (inherited from ContentPack v1), so `packId: "jp"`
+9. **`IDENT_RE` cannot match a 2-character id** (inherited from ContentPack v1), so `packId: "jp"`
    would be rejected. **Deferred:** the runtime contract is frozen, and the future JLPT pack uses
    `jlpt`, so nothing is blocked. Flagged for the architecture lead.
-8. **`notes` is source-only** and is not carried into any artifact beyond a QA coverage count.
+10. **`notes` is source-only** and is not carried into any artifact beyond a QA coverage count.
 
 ---
 
@@ -529,3 +598,19 @@ no Supabase rollback, no redeploy and no cache purge are required.
   `scripts/release_check.py` and its pinned v36 assertion are untouched.
 - No IELTS or TOEIC content, no HSK production data change, no native/Capacitor work, no
   dependency installation, no production Supabase contact, no real user data.
+
+---
+
+## Review follow-up 2 — scope confirmations
+
+- **Concurrency root cause confirmed**, not theoretical: no lock existed, and the journal was
+  created with a plain overwrite. Both are fixed.
+- **Card 1303** remains deferred to **Phase 24F**; `data.js`, `source_data/HSK1-HSK6.xlsx`, the card
+  itself and the legacy importer are unmodified.
+- **`IDENT_RE` / the two-character `jp` issue** remains deferred; the runtime contract is unchanged
+  and the future JLPT pack uses `jlpt`.
+- **Phase 24E was not started.** No registry, loader, pack switching, onboarding or runtime promotion.
+- **No service-worker change.** `hsk-flashcards-v36`, exactly 36 precache assets;
+  `scripts/release_check.py` and its pinned v36 assertion untouched.
+- No new dependency: `msvcrt`, `fcntl`, `os`, `errno` are all standard library.
+- No `shell=True`, no network, no Supabase, no real user data.

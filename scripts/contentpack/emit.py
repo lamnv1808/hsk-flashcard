@@ -330,17 +330,32 @@ def read_journal(output_dir, pack_id):
 
 
 def _fsync_dir(path):
-    """Best effort. Windows cannot fsync a directory handle."""
+    """Flush a directory entry. Returns True only if it actually happened.
+
+    Measured on this platform: Windows raises PermissionError when opening a
+    directory handle for fsync, so directory-entry durability there comes from
+    NTFS metadata journaling rather than from anything this code can request.
+    That limitation is real and is documented rather than papered over --
+    logical recoverability does not depend on it, because the transaction
+    journal file itself is fsync'd before any rename, and roll-forward is
+    checksum-driven and idempotent.
+    """
     try:
         fd = os.open(path, os.O_RDONLY)
     except OSError:
-        return
+        return False
     try:
         os.fsync(fd)
+        return True
     except (OSError, ValueError):
-        pass
+        return False
     finally:
         os.close(fd)
+
+
+def directory_fsync_supported(probe_dir):
+    """Whether this platform lets us flush directory entries at all."""
+    return _fsync_dir(probe_dir)
 
 
 def _sha256_path(path):
@@ -435,11 +450,38 @@ def prepare(plan, artifacts, ledger_bytes, carried_from, fault=_noop_fault):
     fault("after_fsync")
 
 
+class JournalExists(Exception):
+    """A transaction journal is already present for this pack."""
+
+
 def commit(plan, fault=_noop_fault):
-    """Make the journal durable, then run the roll-forward steps."""
+    """Make the journal durable, then run the roll-forward steps.
+
+    The journal is created with O_CREAT|O_EXCL so it can never silently
+    overwrite another transaction's journal. Under the single-writer lock this
+    is unreachable; it is kept as defence in depth, because the cost of being
+    wrong here is publishing one transaction's staged bytes under another
+    transaction's record.
+    """
     path = journal_path(plan["outputDir"], plan["packId"])
     fault("before_journal")
-    _fsync_write(path, canonical_json_bytes(plan))
+
+    data = canonical_json_bytes(plan)
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        raise JournalExists(
+            "a transaction journal already exists for pack '%s'; refusing to "
+            "overwrite another transaction" % plan["packId"])
+    try:
+        os.write(fd, data)
+        try:
+            os.fsync(fd)
+        except (OSError, AttributeError):
+            pass
+    finally:
+        os.close(fd)
+
     _fsync_dir(os.path.dirname(path))
     fault("after_journal")
     return roll_forward(plan, fault)

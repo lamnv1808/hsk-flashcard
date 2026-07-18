@@ -14,6 +14,7 @@ import os
 
 from . import emit, identity, qa, sources, validate
 from .findings import Findings
+from .locking import LockBusy, LockUnavailable, PackLock
 
 CONTENT_PACK_JS = "%s-content-pack.js"
 CARDS_JS = "%s-cards.js"
@@ -152,7 +153,14 @@ def _generate(options, findings, deterministic_note):
 
 
 def build(options, repo_root):
-    """Full build. Writes only after every stage has succeeded."""
+    """Full build. Writes only after every stage has succeeded.
+
+    Everything that mutates durable state -- ledger read, id allocation,
+    staging, journal commit, roll-forward, cleanup -- runs inside the pack's
+    single-writer lock. --check never takes the lock, because taking one would
+    create a file and break its no-write guarantee; it is read-only and may
+    therefore observe a concurrent build mid-flight.
+    """
     findings = Findings()
 
     try:
@@ -163,6 +171,29 @@ def build(options, repo_root):
         result.findings = findings
         return result
 
+    if options.check:
+        return _build_unlocked(options, output_dir, findings)
+
+    try:
+        with PackLock(output_dir, options.pack_id):
+            return _build_unlocked(options, output_dir, findings)
+    except LockBusy as exc:
+        findings.fatal(
+            "BUILD_LOCKED",
+            "%s. Only one build or recovery may mutate a pack at a time; "
+            "nothing was read, allocated or written." % exc)
+        result = BuildResult()
+        result.findings = findings
+        return result
+    except LockUnavailable as exc:
+        findings.fatal("LOCK_UNAVAILABLE", str(exc))
+        result = BuildResult()
+        result.findings = findings
+        return result
+
+
+def _build_unlocked(options, output_dir, findings):
+    """The critical section. Callers hold the pack lock unless read-only."""
     # A journal means a previous run committed but did not finish. Never build
     # from ambiguous state: block until --recover completes it deterministically.
     try:
@@ -245,6 +276,12 @@ def build(options, repo_root):
         # the registry handoff describe. The committed set (which also includes
         # the QA and handoff files) is recorded separately.
         result.published = emit.commit(plan, fault)
+    except emit.JournalExists as exc:
+        # Someone else's journal appeared. Our transaction never committed, so
+        # discard our own staged state and leave theirs strictly alone.
+        emit.abort(plan)
+        findings.fatal("JOURNAL_EXISTS", str(exc))
+        return result
     except BaseException:
         # The journal becoming durable is the commit point. If it never got
         # there, nothing observable changed and the staged state is discardable.
@@ -264,7 +301,12 @@ def _existing_files(directory):
 
 
 def recover(options, repo_root):
-    """Complete an interrupted publication. Deterministic, idempotent."""
+    """Complete an interrupted publication. Deterministic, idempotent.
+
+    Takes the same single-writer lock as a build. Recovery renames the output
+    directory and removes staging, so running it against a live builder would
+    be strictly worse than not running it at all.
+    """
     findings = Findings()
     result = BuildResult()
     result.findings = findings
@@ -275,6 +317,21 @@ def recover(options, repo_root):
         findings.fatal("OUTPUT_PATH_ESCAPE", str(exc))
         return result
 
+    try:
+        with PackLock(output_dir, options.pack_id):
+            return _recover_unlocked(options, output_dir, findings, result)
+    except LockBusy as exc:
+        findings.fatal(
+            "BUILD_LOCKED",
+            "%s. Recovery must not run against a live builder; nothing was "
+            "inspected or changed." % exc)
+        return result
+    except LockUnavailable as exc:
+        findings.fatal("LOCK_UNAVAILABLE", str(exc))
+        return result
+
+
+def _recover_unlocked(options, output_dir, findings, result):
     try:
         plan = emit.read_journal(output_dir, options.pack_id)
     except ValueError as exc:
