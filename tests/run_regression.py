@@ -108,6 +108,13 @@ GROUPS = {
         "tests/data/test_pack_build_concurrency.py",
         "tests/data/test_pack_build_hsk_conformance.py",
     ],
+    "Pack foundation (Phase 24E-A)": [
+        "tests/data/test_pack_registry.py",
+        "tests/data/test_pack_boot_plan.py",
+        "tests/data/test_pack_catalog_build.py",
+        "tests/data/test_pack_promotion.py",
+        "tests/data/test_pack_foundation_isolation.py",
+    ],
 }
 
 def free_port():
