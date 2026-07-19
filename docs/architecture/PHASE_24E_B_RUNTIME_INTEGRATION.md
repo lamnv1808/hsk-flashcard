@@ -200,10 +200,62 @@ No in-page hot switching, and no teardown logic for load-time singletons.
 - Audio / search / Test Mode pack-driving (24E-B.8).
 - Onboarding UI and real IELTS/TOEIC content (24F).
 
+## Explicit pack switch
+
+`HSKUtil.packBootShim.switchPack(targetPackId)` is the first and only writer of
+`activePackId`. Boot stays read-only; persistence happens only in response to an
+explicit user choice.
+
+Validation reuses `planPackBoot` against the retained registry, so the
+identifier rule and the visibility/version gates are never re-implemented. The
+planner is built to FALL BACK, so its fallbacks must never be read as success: a
+switch is valid only when the planner returns the exact requested pack for the
+`requested` reason. Anything else fails with a stable code and mutates nothing.
+
+Order is load-bearing:
+
+```
+validate -> await sync readiness -> stop audio -> mutate -> save
+         -> bounded flush (3 s) -> location.reload()
+```
+
+Readiness comes before any mutation because `pullSettings()` replaces the blob
+wholesale and only accepts a server copy newer than SETTIME; writing first would
+suppress the pull and let the next push overwrite the account's bookmarks and
+notes. Readiness failure is fail-closed: no audio stop, no write, no flush, no
+reload. `switchPack` never calls `start()`, `pullAll()` or `pullSettings()`.
+
+`sync.js` gained two narrow additive changes: `start()` is idempotent through one
+shared promise (so the `online` listener registers exactly once) and exposes
+`whenReady()`, which settles after the initial pull attempt and `reloadState()`
+handling but before the legacy-import prompt; and `pushSettings()`/`flush()`
+report whether the settings push was confirmed. All existing catch, retry, UI
+and offline behavior is unchanged.
+
+| Result | Meaning |
+|---|---|
+| `{ok:true, changed:true, packId, previousPackId, pushed, reloading:true}` | switched; `pushed` is settings-confirmation only |
+| `{ok:true, changed:false, reason:"same-pack"}` | no-op; a malformed stored value is deliberately not repaired |
+| `MALFORMED_PACK_ID` / `UNKNOWN_PACK` / `PACK_HIDDEN` / `PACK_INCOMPATIBLE` / `NO_CATALOG` / `PLAN_FAILED` | rejected; zero side effects |
+| `SYNC_NOT_READY` | readiness missing/threw/rejected/timed out; zero side effects |
+| `WRITE_FAILED` | save threw; in-memory and persisted state restored; no flush/reload |
+| `SWITCH_IN_PROGRESS` | a different target is already switching |
+
+A bug found by these tests and fixed: in local-only mode the async body had no
+`await` before `location.reload()`, so it ran synchronously and cleared the
+reentrancy guard before `switchPack()` returned, letting concurrent calls all
+execute. It now yields once before doing any work.
+
 ## Service worker
 
-Exactly one bump this phase: `hsk-flashcards-v36` -> `hsk-flashcards-v37`,
-36 -> **40 distinct assets**, adding `packs/catalog.js`,
+This phase required **two** bumps, not one. `v36 -> v37` added the boot assets
+(36 -> **40 distinct assets**). `v37 -> v38` was then mandatory because the
+switch API changed the runtime bytes of `sync.js` and
+`core/content/pack-boot-shim.js`, which are themselves precached and served
+cache-first: keeping v37 would have stranded installed users on stale copies of
+exactly the files that were modified. The v38 bump changes no asset, so the
+inventory stays at **40 distinct assets**. This supersedes the earlier
+single-bump assumption recorded during increment 3, adding `packs/catalog.js`,
 `core/content/pack-registry.js`, `core/content/pack-boot.js` and
 `core/content/pack-boot-shim.js`.
 

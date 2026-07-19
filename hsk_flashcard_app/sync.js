@@ -84,13 +84,19 @@
     }
   }
 
+  // Returns TRUE only when the server confirmed this settings blob. Phase
+  // 24E-B.5B: the pack-switch API needs to report whether the user's choice
+  // actually reached the cloud. Existing callers ignore the return value and
+  // the catch/retry behavior is unchanged -- a failure is still swallowed and
+  // retried by the next flush()/online event.
   async function pushSettings() {
     var s = rd(settingsKey(), null);
-    if (!s) return;
+    if (!s) return false;
     var t = localStorage.getItem(SETTIME) || nowISO();
     try {
       await rpc("sync_push_settings", { p_data: s, p_updated_at: t });
-    } catch (_) { /* keep for later */ }
+      return true;
+    } catch (_) { return false; /* keep for later */ }
   }
 
   /* -------------------- PULL / MERGE -------------------- */
@@ -140,22 +146,49 @@
     await pullSettings();
   }
 
-  async function start() { // used on every normal load while logged in
-    window.addEventListener("online", flush);
-    // background: pull cloud changes (full on a fresh device), reflect them, then
-    // run the one-time legacy import prompt, then flush anything pending.
-    try {
-      var c = (await pullProgress(false)) + (await pullSettings());
-      if (c && window.HSK_APP) window.HSK_APP.reloadState();
-      uiState("Đã đồng bộ · " + shortTime());
-    } catch (e) {
-      uiState(navigator.onLine ? "Lỗi đồng bộ (thử lại sau)" : "Ngoại tuyến · sẽ đồng bộ sau");
-    }
-    try { await maybeMigrateLegacy(); } catch (_) {}
-    flush();
+  /*
+   * Initial-pull readiness (Phase 24E-B.5B).
+   *
+   * pullSettings() replaces the settings blob WHOLESALE and only accepts the
+   * server copy when it is newer than SETTIME. So anything that writes settings
+   * before the initial pull has settled makes local look newer, suppresses the
+   * pull, and lets the next whole-blob push overwrite the account's bookmarks
+   * and notes. The pack-switch API must therefore be able to wait for this.
+   *
+   * readyPromise settles after the initial pullProgress + pullSettings attempt
+   * and any reloadState() handling -- including the offline/failure path, which
+   * is caught below -- but BEFORE maybeMigrateLegacy(), because that shows a
+   * modal and waits for the user. Nothing else about the sequence changes.
+   */
+  var startPromise = null, readyResolve = null;
+  var readyPromise = new Promise(function (res) { readyResolve = res; });
+  function whenReady() { return readyPromise; }
+
+  function start() { // used on every normal load while logged in
+    // Idempotent: repeated calls reuse the one start operation, so the "online"
+    // listener below can never be registered twice.
+    if (startPromise) return startPromise;
+    startPromise = (async function () {
+      window.addEventListener("online", flush);
+      // background: pull cloud changes (full on a fresh device), reflect them, then
+      // run the one-time legacy import prompt, then flush anything pending.
+      try {
+        var c = (await pullProgress(false)) + (await pullSettings());
+        if (c && window.HSK_APP) window.HSK_APP.reloadState();
+        uiState("Đã đồng bộ · " + shortTime());
+      } catch (e) {
+        uiState(navigator.onLine ? "Lỗi đồng bộ (thử lại sau)" : "Ngoại tuyến · sẽ đồng bộ sau");
+      }
+      readyResolve(true);            // settles before the legacy prompt blocks
+      try { await maybeMigrateLegacy(); } catch (_) {}
+      flush();
+    })();
+    return startPromise;
   }
 
-  async function flush() { await pushProgress(); await pushSettings(); }
+  // Progress push and its existing error/UI behavior are unchanged; the return
+  // value reports the SETTINGS push specifically.
+  async function flush() { await pushProgress(); return await pushSettings(); }
 
   function onSettingsChanged() { localStorage.setItem(SETTIME, nowISO()); schedulePush(); }
 
@@ -244,6 +277,7 @@
 
   window.HSKSync = {
     start: start,
+    whenReady: whenReady,
     pullAll: pullAll,
     flush: flush,
     markDirty: markDirty,

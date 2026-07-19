@@ -120,6 +120,7 @@ GROUPS = {
         "tests/browser/test_pack_catalog_runtime.py",
         "tests/browser/test_pack_boot_parser_time.py",
         "tests/browser/test_pack_settings_no_write.py",
+        "tests/browser/test_pack_switch.py",
     ],
 }
 

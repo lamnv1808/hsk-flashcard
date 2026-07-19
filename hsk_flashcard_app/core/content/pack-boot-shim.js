@@ -64,7 +64,10 @@
     error: null,
     resolved: false,
     wroteCards: false,
-    wroteManifest: false
+    wroteManifest: false,
+    // Retained so switchPack() validates against the SAME validated registry
+    // the boot decision used, rather than rebuilding one that could differ.
+    registry: null
   };
 
   function readJSON(key) {
@@ -110,6 +113,7 @@
     state.resolved = true;
     try {
       var registry = NS.createPackRegistry(window.FLASHEDU_CATALOG);
+      state.registry = registry;
       var plan = NS.planPackBoot({
         registry: registry,
         requestedPackId: readActivePackId(),
@@ -208,9 +212,203 @@
     return true;
   }
 
+  /* ------------------------------------------------ explicit pack switch */
+
+  /*
+   * switchPack(targetPackId) — the FIRST AND ONLY writer of activePackId.
+   *
+   * Boot stays strictly read-only (see the no-write contract); persistence
+   * happens only here, in response to an explicit user choice.
+   *
+   * Validation reuses planPackBoot against the retained registry rather than
+   * re-implementing the identifier rule or the visibility/version gates. The
+   * planner is built to FALL BACK, so its fallbacks must never be read as
+   * success: a switch is valid only when the planner returns the exact pack
+   * that was asked for, for the 'requested' reason. Anything else -- malformed,
+   * unknown, hidden, version-gated -- is a failure, never a silent landing on
+   * HSK.
+   *
+   * Ordering is deliberate and load-bearing:
+   *   validate -> await sync readiness -> stop audio -> mutate -> save ->
+   *   bounded flush -> reload
+   * Readiness comes before any mutation because pullSettings() replaces the
+   * settings blob wholesale and only accepts a server copy newer than SETTIME;
+   * writing first would suppress the pull and let the next push overwrite the
+   * account's bookmarks and notes. Readiness failure is therefore fail-closed:
+   * nothing is stopped, written, pushed or reloaded.
+   */
+  var switching = null;
+  var TIMED_OUT = {};
+
+  function race(promise, ms) {
+    return Promise.race([
+      Promise.resolve(promise),
+      new Promise(function (res) { setTimeout(function () { res(TIMED_OUT); }, ms); })
+    ]);
+  }
+
+  // Planner reason -> stable failure code.
+  var REASON_CODE = {
+    "fallback-malformed-request": "MALFORMED_PACK_ID",
+    "default-first-run": "MALFORMED_PACK_ID",
+    "fallback-unknown-pack": "UNKNOWN_PACK",
+    "fallback-not-launch-visible": "PACK_HIDDEN",
+    "fallback-incompatible-app-version": "PACK_INCOMPATIBLE"
+  };
+
+  function failure(code, message, packId) {
+    return { ok: false, code: code, message: message, packId: packId };
+  }
+
+  function switchPack(targetPackId) {
+    // Guard is set before the first await, so a second call cannot interleave.
+    if (switching) {
+      if (switching.target === targetPackId) return switching.promise;
+      return Promise.resolve(failure(
+        "SWITCH_IN_PROGRESS", "a pack switch is already in progress", targetPackId));
+    }
+
+    var registry = state.registry;
+    if (!registry) {
+      return Promise.resolve(failure(
+        "NO_CATALOG", "no validated catalog is available", targetPackId));
+    }
+
+    var candidate;
+    try {
+      candidate = NS.planPackBoot({
+        registry: registry,
+        requestedPackId: targetPackId,
+        appVersion: registry.getAppVersion()
+      });
+    } catch (e) {
+      return Promise.resolve(failure(
+        "PLAN_FAILED", String((e && e.message) || e), targetPackId));
+    }
+    if (!candidate || candidate.ok !== true) {
+      return Promise.resolve(failure(
+        "PLAN_FAILED", "boot planning produced no usable plan", targetPackId));
+    }
+    if (candidate.reason !== "requested" || candidate.packId !== targetPackId) {
+      return Promise.resolve(failure(
+        REASON_CODE[candidate.reason] || "PLAN_FAILED",
+        "target rejected: " + candidate.reason, targetPackId));
+    }
+
+    // Same EFFECTIVE pack: a complete no-op. A malformed stored value is
+    // deliberately NOT repaired here -- repairing it would be a settings write
+    // the user never asked for, which is exactly what the no-write contract
+    // forbids.
+    var current = state.plan ? state.plan.packId : null;
+    if (targetPackId === current) {
+      return Promise.resolve({
+        ok: true, changed: false, packId: targetPackId, reason: "same-pack"
+      });
+    }
+
+    var entry = { target: targetPackId, promise: null };
+    switching = entry;
+    entry.promise = (function () {
+      return (async function () {
+        try {
+          // Yield once before doing anything. In local-only mode there is no
+          // readiness/flush await, so without this the whole body -- including
+          // the finally that clears the guard -- would run synchronously inside
+          // the switchPack() call, and a caller firing twice in the same tick
+          // would execute the switch twice.
+          await Promise.resolve();
+
+          // ---- initial-pull readiness (fail-closed) ---------------------
+          var sync = window.HSKSync;
+          if (sync) {
+            if (typeof sync.whenReady !== "function") {
+              return failure("SYNC_NOT_READY",
+                             "sync is present but exposes no readiness contract",
+                             targetPackId);
+            }
+            var settled;
+            try {
+              settled = await race(sync.whenReady(), 5000);
+            } catch (e) {
+              // A rejected readiness promise is NOT swallowed.
+              return failure("SYNC_NOT_READY",
+                             "readiness rejected: " + String((e && e.message) || e),
+                             targetPackId);
+            }
+            if (settled === TIMED_OUT) {
+              return failure("SYNC_NOT_READY",
+                             "initial settings sync did not settle in time",
+                             targetPackId);
+            }
+          }
+          // HSKSync absent => genuine local-only mode; proceed.
+
+          // ---- verify the write path BEFORE touching anything ------------
+          var app = window.HSK_APP;
+          if (!app || typeof app.getSettings !== "function" ||
+              typeof window.saveSettings !== "function") {
+            return failure("WRITE_FAILED", "settings write path unavailable",
+                           targetPackId);
+          }
+          var live = app.getSettings();
+          if (!live || typeof live !== "object") {
+            return failure("WRITE_FAILED", "live settings object unavailable",
+                           targetPackId);
+          }
+
+          // ---- audio stops immediately before mutation -------------------
+          if (typeof window.stopSpeech === "function") window.stopSpeech();
+
+          // ---- transaction ----------------------------------------------
+          var storageKey = settingsKey();
+          var hadKey = Object.prototype.hasOwnProperty.call(live, "activePackId");
+          var prevValue = live.activePackId;
+          var prevRaw = null;
+          try { prevRaw = localStorage.getItem(storageKey); } catch (_) {}
+
+          live.activePackId = targetPackId;   // only this key changes
+          try {
+            window.saveSettings();            // exactly once; owns SETTIME
+          } catch (e) {
+            // Restore the property EXACTLY, including its absence.
+            if (hadKey) live.activePackId = prevValue;
+            else delete live.activePackId;
+            // Best-effort: undo any partial persisted blob.
+            try {
+              if (prevRaw === null) localStorage.removeItem(storageKey);
+              else localStorage.setItem(storageKey, prevRaw);
+            } catch (_) {}
+            return failure("WRITE_FAILED", String((e && e.message) || e),
+                           targetPackId);
+          }
+
+          // ---- bounded best-effort push, then reload regardless ----------
+          // A dead network must not trap the user on the old pack; the local
+          // write and SETTIME survive, so the existing start()/online -> flush
+          // path retries the choice later.
+          var pushed = false;
+          if (sync && typeof sync.flush === "function") {
+            try { pushed = (await race(sync.flush(), 3000)) === true; }
+            catch (_) { pushed = false; }
+          }
+
+          location.reload();                  // the activation boundary
+          return {
+            ok: true, changed: true, packId: targetPackId,
+            previousPackId: current, pushed: pushed, reloading: true
+          };
+        } finally {
+          switching = null;
+        }
+      })();
+    })();
+    return entry.promise;
+  }
+
   NS.packBootShim = {
     writeCards: writeCards,
     writeManifest: writeManifest,
+    switchPack: switchPack,
     // Introspection for tests and for the Phase 24F pack switcher.
     getPlan: function () { return state.plan; },
     getError: function () { return state.error; },
