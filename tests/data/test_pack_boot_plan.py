@@ -217,8 +217,8 @@ def main():
         pg.wait_for_timeout(300)
 
         pre = pg.evaluate("() => typeof window.HSKUtil.planPackBoot")
-        check("boot planner is NOT loaded by production index.html",
-              pre == "undefined")
+        check("boot planner IS loaded by production index.html",
+              pre == "function")
 
         pg.add_script_tag(path=REGISTRY_JS)
         pg.add_script_tag(path=BOOT_JS)

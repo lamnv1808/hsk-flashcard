@@ -244,7 +244,7 @@ def main():
         # call site, so the module must be provably absent from the page until
         # a test puts it there.
         pre = pg.evaluate("() => typeof window.HSKUtil.createPackRegistry")
-        check("registry is NOT loaded by production index.html", pre == "undefined")
+        check("registry IS loaded by production index.html", pre == "function")
 
         pg.add_script_tag(path=REGISTRY_JS)
         pg.add_script_tag(content=HARNESS)

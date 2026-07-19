@@ -118,6 +118,7 @@ GROUPS = {
     "Pack runtime integration (Phase 24E-B)": [
         "tests/data/test_pack_catalog_legacy.py",
         "tests/browser/test_pack_catalog_runtime.py",
+        "tests/browser/test_pack_boot_parser_time.py",
     ],
 }
 

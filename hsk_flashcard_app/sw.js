@@ -1,5 +1,5 @@
 
-const CACHE='hsk-flashcards-v36';
+const CACHE='hsk-flashcards-v37';
 const ASSETS=[
   './','index.html','styles.css','app.js','data.js','manifest.webmanifest',
   'core/platform/platform.js',
@@ -7,6 +7,8 @@ const ASSETS=[
   'core/sessions/study-session-state-machine.js',
   'core/util/date.js','core/util/levels.js','core/util/shuffle.js','core/util/card-index.js',
   'core/content/content-pack.js','packs/hsk/hsk-content-pack.js',
+  'packs/catalog.js','core/content/pack-registry.js',
+  'core/content/pack-boot.js','core/content/pack-boot-shim.js',
   'core/cards/card-repository.js','core/settings/settings-repository.js',
   'core/progress/progress-repository.js','core/progress/progress-writer.js',
   'core/sessions/study-session-query.js','core/analytics/analytics-query.js',

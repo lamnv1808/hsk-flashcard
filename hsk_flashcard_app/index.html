@@ -410,13 +410,27 @@
       </section>
     </main>
   </div>
-  <script src="data.js"></script>
+  <!-- Phase 24E-B parser-time pack boot. The active pack's cards payload and
+       manifest adapter are inserted synchronously at the two positions the
+       static data.js / hsk-content-pack.js tags used to occupy, because the
+       manifest depends on the cards AND on the three core modules between
+       them. Order below is unchanged; only the SOURCE of the two paths moved.
+       supabase-config.js is hoisted here (trivial, dependency-free) so the shim
+       can resolve the account-namespaced activePackId before auth.js exists.
+       See docs/architecture/PHASE_24E_B_RUNTIME_INTEGRATION.md -->
+  <script src="supabase-config.js"></script>
+  <script src="packs/catalog.js"></script>
+  <script src="core/content/pack-registry.js"></script>
+  <script src="core/content/pack-boot.js"></script>
+  <script src="core/content/pack-boot-shim.js"></script>
+  <script>window.HSKUtil.packBootShim.writeCards();</script>
   <script src="core/util/date.js"></script>
   <script src="core/util/levels.js"></script>
   <script src="core/util/shuffle.js"></script>
   <script src="core/util/card-index.js"></script>
   <script src="core/content/content-pack.js"></script>
-  <script src="packs/hsk/hsk-content-pack.js"></script>
+  <!-- Manifest adapter for the SAME pack chosen above (plan.expected.manifestPath). -->
+  <script>window.HSKUtil.packBootShim.writeManifest();</script>
   <script src="core/cards/card-repository.js"></script>
   <script src="core/settings/settings-repository.js"></script>
   <script src="core/progress/progress-repository.js"></script>
@@ -428,7 +442,7 @@
   <script src="core/analytics/analytics-query.js"></script>
   <script src="core/metadata/user-metadata-query.js"></script>
   <script src="core/testing/test-mode-query.js"></script>
-  <script src="supabase-config.js"></script>
+  <!-- supabase-config.js is loaded above, before the pack boot shim. -->
   <script src="auth.js"></script>
   <script src="core/auth/auth-context-query.js"></script>
   <script src="core/platform/platform.js"></script>

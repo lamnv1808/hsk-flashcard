@@ -26,10 +26,11 @@ from datajs import emit  # noqa: E402
 APP = os.path.join(ROOT, "hsk_flashcard_app")
 
 FOUNDATION_JS = ("core/content/pack-registry.js", "core/content/pack-boot.js")
+SHIM_JS = "core/content/pack-boot-shim.js"
 
 DATA_JS_SHA256 = "d0b0a279228d86caf7dbe14c757502311ec90e22f3d8a7c14a978c056be42377"
-EXPECTED_CACHE = "hsk-flashcards-v36"
-EXPECTED_ASSET_COUNT = 36
+EXPECTED_CACHE = "hsk-flashcards-v37"
+EXPECTED_ASSET_COUNT = 40
 
 # Fixture identifiers that must never reach the shipped app.
 # Phase 24E-B: FLASHEDU_CATALOG was removed from this list. In Phase 24E-A the
@@ -63,30 +64,51 @@ def main():
     index_html = read(os.path.join(APP, "index.html"))
     sw = read(os.path.join(APP, "sw.js"))
 
-    # --- the foundation modules exist but are not wired in ----------------
+    # --- the foundation modules are now WIRED IN (Phase 24E-B increment 3) --
+    # Phase 24E-A asserted the inverse of every check below: the foundation had
+    # to exist while being unreferenced by index.html and absent from the
+    # precache, which is what "foundation only, no runtime integration" meant.
+    # Increment 3 wires it into production parser-time boot, so those guards are
+    # inverted here rather than deleted -- the property still under test is that
+    # the wiring is COMPLETE and consistent (referenced AND precached), because
+    # a module referenced but not precached would break offline boot.
     for rel in FOUNDATION_JS:
         path = os.path.join(APP, rel.replace("/", os.sep))
         check("foundation module exists: %s" % rel, os.path.isfile(path))
-        check("%s is NOT referenced by index.html" % rel, rel not in index_html)
-        check("%s is NOT in the service-worker precache" % rel, rel not in sw)
+        check("%s IS referenced by index.html" % rel, rel in index_html)
+        check("%s IS in the service-worker precache" % rel, rel in sw)
 
-    # A bare filename check too, in case a future edit uses a different prefix.
-    for rel in FOUNDATION_JS:
-        base = os.path.basename(rel)
-        check("%s does not appear in index.html by name" % base,
-              base not in index_html)
-        check("%s does not appear in sw.js by name" % base, base not in sw)
+    # The parser-time shim is the only inserter of script tags; it must be
+    # wired and precached on exactly the same terms.
+    check("boot shim exists", os.path.isfile(os.path.join(APP, SHIM_JS.replace("/", os.sep))))
+    check("boot shim IS referenced by index.html", SHIM_JS in index_html)
+    check("boot shim IS in the service-worker precache", SHIM_JS in sw)
 
-    # --- no production code imports them ----------------------------------
+    # --- exactly one consumer of the foundation API -------------------------
+    # The API must stay confined to the shim. If any other production script
+    # started building its own registry or plan, two code paths could disagree
+    # about which pack is active -- the mixed-content failure this whole phase
+    # exists to prevent.
     referenced_by = []
     for base, _dirs, files in os.walk(APP):
         for name in files:
-            if not name.endswith(".js") or name in ("pack-registry.js", "pack-boot.js"):
+            if not name.endswith(".js") or name in (
+                    "pack-registry.js", "pack-boot.js", "pack-boot-shim.js"):
                 continue
             text = read(os.path.join(base, name))
             if "createPackRegistry" in text or "planPackBoot" in text:
                 referenced_by.append(name)
-    check("no production script calls the foundation API", referenced_by == [])
+    check("only the boot shim calls the foundation API", referenced_by == [])
+
+    # The payloads are no longer static tags: they are inserted by the shim.
+    check("data.js is not a static script tag",
+          '<script src="data.js">' not in index_html)
+    check("the HSK adapter is not a static script tag",
+          '<script src="packs/hsk/hsk-content-pack.js">' not in index_html)
+    # ...but both must still be precached, or offline boot loses its payload.
+    check("data.js is still precached", "'data.js'" in sw)
+    check("the HSK adapter is still precached",
+          "'packs/hsk/hsk-content-pack.js'" in sw)
 
     # --- service worker is untouched ---------------------------------------
     version = re.search(r"const\s+CACHE\s*=\s*'([^']+)'", sw)
@@ -101,9 +123,20 @@ def main():
         items = ast.literal_eval(assets.group(1))
         check("precache inventory is still exactly %d assets" % EXPECTED_ASSET_COUNT,
               len(items) == EXPECTED_ASSET_COUNT)
-        check("no foundation module is precached",
-              not any("pack-registry" in i or "pack-boot" in i for i in items))
-        check("no catalog is precached", not any("catalog" in i for i in items))
+        # Inverted for Phase 24E-B increment 3: the boot path is only offline-
+        # safe if every module it loads is precached. Missing any one of these
+        # would make the app boot online and fail offline -- the worst kind of
+        # regression to discover in production.
+        for needed in ("core/content/pack-registry.js",
+                       "core/content/pack-boot.js",
+                       "core/content/pack-boot-shim.js",
+                       "packs/catalog.js"):
+            check("%s is precached" % needed, needed in items)
+        # Build-only artifacts must still never be precached.
+        check("no build-only artifact is precached",
+              not any(i.endswith((("-source.csi.json"), "qa-report.json",
+                                  "qa-report.md", "registry-handoff.json"))
+                      for i in items))
 
     # --- HSK runtime invariants --------------------------------------------
     data_js = os.path.join(APP, "data.js")
