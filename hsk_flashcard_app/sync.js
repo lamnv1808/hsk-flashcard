@@ -17,6 +17,7 @@
   var LASTPULL   = "hsk_sync_lastpull::" + uid; // ISO of last successful pull
   var SETTIME    = "hsk_sync_settime::" + uid;  // settings updatedAt ISO
   var IMPORTDONE = "hsk_import_done::"  + uid;   // legacy-import prompt shown once
+  var PENDING_RESET = "hsk_sync_pending_reset::" + uid; // {min,max} owed DELETE
 
   function progressKey() { return window.HSK_AUTH.progressKey; }
   function settingsKey() { return window.HSK_AUTH.settingsKey; }
@@ -101,6 +102,13 @@
 
   /* -------------------- PULL / MERGE -------------------- */
   async function pullProgress(full) {
+    // A pending reset means the server still holds rows the user deleted. If
+    // we accepted server rows now, meta is empty for them so `!localTime` is
+    // true and the deleted progress would come straight back. Abort instead.
+    if (!(await flushPendingReset())) {
+      uiState("Ngoại tuyến · sẽ đồng bộ sau");
+      return 0;
+    }
     var since = full ? null : localStorage.getItem(LASTPULL);
     var q = "/rest/v1/card_progress?select=card_id,due,interval,reps,correct,attempts,updated_at";
     if (since) q += "&updated_at=gt." + encodeURIComponent(since);
@@ -197,14 +205,104 @@
 
   // Progress push and its existing error/UI behavior are unchanged; the return
   // value reports the SETTINGS push specifically.
-  async function flush() { await pushProgress(); return await pushSettings(); }
+  async function flush() {
+    await flushPendingReset();   // retry any owed bounded delete first
+    await pushProgress();
+    return await pushSettings();
+  }
 
   function onSettingsChanged() { localStorage.setItem(SETTIME, nowISO()); schedulePush(); }
 
-  async function onReset() {
-    setDirty([]); setMeta({});
-    try { await authedFetch("/rest/v1/card_progress?card_id=gte.0", { method: "DELETE" }); uiState("Đã đồng bộ · " + shortTime()); }
-    catch (_) { uiState("Ngoại tuyến · sẽ đồng bộ sau"); }
+  /* ---------------- active-pack reset (bounded + durable) ---------------- */
+
+  /*
+   * A reset used to DELETE every row from card id zero upward -- every row
+   * the user owned, in every
+   * course -- and it cleared the whole dirty/meta map. It was also not durable:
+   * if the delete failed, the local rows were already gone but the server rows
+   * survived, and because meta was wiped the next pullProgress saw
+   * `!localTime` for each of them and restored the deleted progress.
+   *
+   * So the reset is now bounded by the active pack's range AND recorded as
+   * pending until the server confirms it. A pending reset blocks pullProgress,
+   * because accepting server rows while a delete is still owed is exactly how
+   * deleted progress comes back.
+   */
+  function readPendingReset() {
+    var p = rd(PENDING_RESET, null);
+    if (!p || typeof p !== "object") return null;
+    var min = p.min, max = p.max;
+    // Corrupt state must never widen a delete: reject rather than repair.
+    if (typeof min !== "number" || typeof max !== "number" ||
+        !isFinite(min) || !isFinite(max) ||
+        Math.floor(min) !== min || Math.floor(max) !== max || min > max) {
+      return null;
+    }
+    return { min: min, max: max };
+  }
+
+  function rangeQuery(range) {
+    return "/rest/v1/card_progress?card_id=gte." + range.min +
+           "&card_id=lte." + range.max;
+  }
+
+  // Returns true when nothing is owed (either nothing pending, or the bounded
+  // delete succeeded). User scope stays with RLS + bearer; no user_id predicate.
+  async function flushPendingReset() {
+    var pending = readPendingReset();
+    if (!pending) {
+      // Drop unusable state so it cannot be retried forever.
+      if (localStorage.getItem(PENDING_RESET)) localStorage.removeItem(PENDING_RESET);
+      return true;
+    }
+    try {
+      await authedFetch(rangeQuery(pending), { method: "DELETE" });
+      localStorage.removeItem(PENDING_RESET);   // cleared only on success
+      return true;
+    } catch (_) {
+      return false;                              // stays pending, retried later
+    }
+  }
+
+  async function onReset(range) {
+    var pending = (range && typeof range === "object")
+      ? readPendingResetFrom(range) : null;
+    if (!pending) {
+      // No valid range: touch nothing at all rather than guess.
+      return;
+    }
+    // Drop only the ACTIVE range's dirty ids and meta timestamps; every foreign
+    // entry survives byte-for-byte so another course's pending push is intact.
+    setDirty(dirtySet().filter(function (id) {
+      var n = Number(id);
+      return !(isFinite(n) && n >= pending.min && n <= pending.max);
+    }));
+    var m = meta(), kept = {}, k, n;
+    for (k in m) {
+      if (!Object.prototype.hasOwnProperty.call(m, k)) continue;
+      n = Number(k);
+      if (isFinite(n) && n >= pending.min && n <= pending.max) continue;
+      kept[k] = m[k];
+    }
+    setMeta(kept);
+
+    // Recorded BEFORE the first await, so a failure or a closed tab still
+    // leaves the obligation durable.
+    wr(PENDING_RESET, { min: pending.min, max: pending.max });
+
+    if (await flushPendingReset()) uiState("Đã đồng bộ · " + shortTime());
+    else uiState("Ngoại tuyến · sẽ đồng bộ sau");
+  }
+
+  // Same validation as readPendingReset, applied to a caller-supplied range.
+  function readPendingResetFrom(range) {
+    var min = range.min, max = range.max;
+    if (typeof min !== "number" || typeof max !== "number" ||
+        !isFinite(min) || !isFinite(max) ||
+        Math.floor(min) !== min || Math.floor(max) !== max || min > max) {
+      return null;
+    }
+    return { min: min, max: max };
   }
 
   /* -------------------- one-time legacy import -------------------- */

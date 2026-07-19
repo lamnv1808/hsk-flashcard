@@ -97,13 +97,42 @@
     // resetBtn. The controller still owns the confirmation dialog and UI refresh.
     // O(1): a single object replacement (no per-row loop, no per-card dirty events).
     //   replace progress with {} -> save() -> onReset()   (exactly one of each)
-    function reset() {
+    function reset(range) {
       if (!replaceProgress) return null;          // needs the controller's reassign hook
-      var next = {};
-      replaceProgress(next);                       // app.js: progress = next  (new empty object)
-      save();                                      // persist the empty state (serializes {})
-      onReset();                                    // existing sync-guarded reset (fire-and-forget)
-      return { cleared: true };
+
+      // The range is the ACTIVE pack's declared ownership block. Reset must
+      // never touch a row belonging to another pack, so an absent or malformed
+      // range fails closed: a "reset everything" fallback here would silently
+      // destroy other courses' progress, which is exactly the bug this
+      // replaces. Nothing is replaced, saved, pushed or deleted on failure.
+      if (!range || typeof range !== "object") {
+        return { cleared: false, removed: 0, error: "MISSING_RANGE" };
+      }
+      var min = range.min, max = range.max;
+      var ok = typeof min === "number" && typeof max === "number" &&
+               isFinite(min) && isFinite(max) &&
+               Math.floor(min) === min && Math.floor(max) === max &&
+               min <= max;
+      if (!ok) {
+        return { cleared: false, removed: 0, error: "INVALID_RANGE" };
+      }
+
+      // Keep every row OUTSIDE the active range. Ids are the integer join key
+      // for progress, and object keys are strings, so coerce before comparing;
+      // a non-numeric key cannot belong to the active pack and is preserved.
+      var prog = getProgress() || {};
+      var next = {}, removed = 0, k, id;
+      for (k in prog) {
+        if (!Object.prototype.hasOwnProperty.call(prog, k)) continue;
+        id = Number(k);
+        if (isFinite(id) && id >= min && id <= max) { removed++; continue; }
+        next[k] = prog[k];
+      }
+
+      replaceProgress(next);   // app.js: progress = next
+      save();                  // exactly one save
+      onReset(range);          // exactly one sync-guarded reset, bounded by range
+      return { cleared: true, removed: removed, range: { min: min, max: max } };
     }
 
     return { grade: grade, restore: restore, reset: reset };

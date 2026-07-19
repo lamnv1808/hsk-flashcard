@@ -289,6 +289,41 @@ later page in the same browser context -- deliberately not reseeded -- inherits
 the persisted blob and the existing `flush()` path pushes it:
 `inherited=compatpack pushedActive=compatpack`.
 
+## Active-pack reset
+
+Reset used to delete every row the user owned in EVERY course
+(`card_id=gte.0`) and to clear the whole dirty/meta map. It was also not
+durable: if the cloud delete failed, the local rows were already gone but the
+server rows survived, and because meta had been wiped the next `pullProgress`
+saw `!localTime` for each of them and restored the deleted progress.
+
+`ProgressWriter.reset(range)` now takes the active pack's declared ownership
+range (HSK `1-999999`, not the observed allocation `1-5002`). It validates
+finite integers with `min <= max` BEFORE any side effect; a missing or malformed
+range fails closed with zero replace, save, `onReset` or request, because a
+"reset everything" fallback would destroy other courses. It keeps every row
+outside the range, calls `replaceProgress`/`save`/`onReset(range)` exactly once
+each, and returns `{cleared, removed, range}`. `app.js` passes
+`contentPack.getIdRange()`, forwards the range through its `onReset` hook, and
+the confirmation now says "this course".
+
+The cloud delete is bounded (`card_id=gte.<min>&card_id=lte.<max>`; user scope
+still comes from RLS + bearer, no `user_id` predicate) and durable: the
+validated range is written to an account-namespaced
+`hsk_sync_pending_reset::<uid>` record synchronously before the first await, and
+cleared only when the server confirms. A pending reset is retried through the
+existing `flush()`/online lifecycle, and **`pullProgress` completes it before
+accepting any server row** -- aborting the pull if it cannot -- because
+accepting rows while a delete is still owed is exactly how deleted progress
+comes back. Persisted ranges are re-validated before a URL is built, so corrupt
+state can never widen a delete. Only active-range dirty ids and meta timestamps
+are dropped; foreign entries survive byte-for-byte.
+
+Observed: `DELETE ?card_id=gte.1&card_id=lte.999999`; on failure the marker is
+retained and the next boot issues `DELETE` **before** any progress `GET`, with
+no progress `GET` at all while unresolved; on success the marker clears, server
+active rows are gone, foreign rows and the other account are untouched.
+
 ## Service worker
 
 This phase required **two** bumps, not one. `v36 -> v37` added the boot assets

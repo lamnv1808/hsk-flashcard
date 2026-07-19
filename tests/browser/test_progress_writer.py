@@ -377,7 +377,7 @@ def main():
             var wc={save:0,dirty:0,onReset:0};
             var w=mkResetWriter(wHolder, wc);
             var oldRef=wHolder.prog;
-            var res=w.reset();
+            var res=w.reset({min:1,max:999999});
             return {
               progEqual: JSON.stringify(wHolder.prog)===JSON.stringify(oldHolder.prog),
               becameEmpty: JSON.stringify(wHolder.prog)==='{}',
@@ -407,7 +407,7 @@ def main():
           var w=HSKUtil.createProgressWriter({ progressProvider:function(){return holder.prog;},
             progressRepository:repo, srsCalculator:__srs, save:function(){}, markDirty:function(){},
             replaceProgress:function(n){holder.prog=n;}, onReset:function(){}, dateProvider:__fixedNow() });
-          w.reset();
+          w.reset({min:1,max:999999});
           var h=analytics.getHomeSummary(['HSK1']);
           return {
             beforeLearned2: beforeLearned===2,
@@ -432,7 +432,7 @@ def main():
             progressRepository:HSKUtil.createProgressRepository({progressProvider:function(){return holder.prog;}}),
             srsCalculator:__srs, save:function(){saves++;}, markDirty:function(){},
             replaceProgress:function(n){holder.prog=n;}, onReset:function(){ if(false) resets++; }, dateProvider:__fixedNow() });
-          w.reset();
+          w.reset({min:1,max:999999});
           var localOnly = saves===1 && resets===0 && JSON.stringify(holder.prog)==='{}';
           // account isolation: reset A must not touch B
           var A={prog:{1:{due:'x',interval:3,reps:1,correct:1,attempts:1}}};
@@ -442,11 +442,11 @@ def main():
             progressRepository:HSKUtil.createProgressRepository({progressProvider:function(){return active.who.prog;}}),
             srsCalculator:__srs, save:function(){}, markDirty:function(){},
             replaceProgress:function(n){active.who.prog=n;}, onReset:function(){}, dateProvider:__fixedNow() });
-          w2.reset();  // resets A
+          w2.reset({min:1,max:999999});  // resets A
           var isolation = JSON.stringify(A.prog)==='{}' && ('2' in B.prog) && Object.keys(B.prog).length===1;
           // guard: no replaceProgress -> reset returns null, no throw
           var w3=HSKUtil.createProgressWriter({ progressProvider:function(){return {};}, srsCalculator:__srs, save:function(){}, markDirty:function(){}, dateProvider:__fixedNow() });
-          var guard = w3.reset()===null;
+          var guard = w3.reset({min:1,max:999999})===null;
           return { localOnly, isolation, guard };
         }""")
         for k in ["localOnly", "isolation", "guard"]:
@@ -461,7 +461,7 @@ def main():
             progressRepository:HSKUtil.createProgressRepository({progressProvider:function(){return holder.prog;}}),
             srsCalculator:__srs, save:function(){}, markDirty:function(){},
             replaceProgress:function(n){holder.prog=n;}, onReset:function(){}, dateProvider:__fixedNow() });
-          w.reset();
+          w.reset({min:1,max:999999});
           var after={}; for(var q=0;q<localStorage.length;q++){var kk=localStorage.key(q); after[kk]=localStorage.getItem(kk);}
           var unchanged=localStorage.length===beforeLen;
           for(var bb in before){ if(before[bb]!==after[bb]) unchanged=false; }
