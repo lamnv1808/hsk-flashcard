@@ -309,6 +309,7 @@
     var entry = { target: targetPackId, promise: null };
     switching = entry;
     entry.promise = (function () {
+      var reloadIssued = false;
       return (async function () {
         try {
           // Yield once before doing anything. In local-only mode there is no
@@ -356,15 +357,30 @@
                            targetPackId);
           }
 
-          // ---- audio stops immediately before mutation -------------------
-          if (typeof window.stopSpeech === "function") window.stopSpeech();
-
           // ---- transaction ----------------------------------------------
           var storageKey = settingsKey();
           var hadKey = Object.prototype.hasOwnProperty.call(live, "activePackId");
           var prevValue = live.activePackId;
-          var prevRaw = null;
-          try { prevRaw = localStorage.getItem(storageKey); } catch (_) {}
+
+          // Snapshot the exact previous raw blob BEFORE anything is touched.
+          // A successful read returning null means "absent"; a THROW means we
+          // cannot roll back, which is a different thing entirely. Swallowing
+          // the throw and continuing with prevRaw = null would mean a later
+          // save failure "restores" by deleting a blob we never actually read
+          // -- destroying the user's settings. So a failed read fails closed,
+          // before any speech stop, mutation, save, flush or reload.
+          var prevRaw;
+          try {
+            prevRaw = localStorage.getItem(storageKey);
+          } catch (e) {
+            return failure("WRITE_FAILED",
+                           "settings snapshot unreadable: " + String((e && e.message) || e),
+                           targetPackId);
+          }
+
+          // Everything that can fail has now succeeded, so this is the last
+          // point before user-visible effects begin.
+          if (typeof window.stopSpeech === "function") window.stopSpeech();
 
           live.activePackId = targetPackId;   // only this key changes
           try {
@@ -392,13 +408,23 @@
             catch (_) { pushed = false; }
           }
 
-          location.reload();                  // the activation boundary
+          // The activation boundary. Once reload has been REQUESTED the guard
+          // must stay latched: the promise resolves before navigation actually
+          // happens, so clearing it here would open a window in which a second
+          // call could save, flush and reload again on a document that is
+          // already on its way out. The new document resets module state
+          // naturally, so nothing needs to unlatch it.
+          location.reload();
+          reloadIssued = true;
           return {
             ok: true, changed: true, packId: targetPackId,
             previousPackId: current, pushed: pushed, reloading: true
           };
         } finally {
-          switching = null;
+          // Only an operation that did NOT request navigation releases the
+          // guard; if reload() threw, reloadIssued stays false and the guard
+          // clears normally.
+          if (!reloadIssued) switching = null;
         }
       })();
     })();

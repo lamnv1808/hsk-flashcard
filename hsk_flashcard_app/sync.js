@@ -172,13 +172,22 @@
       window.addEventListener("online", flush);
       // background: pull cloud changes (full on a fresh device), reflect them, then
       // run the one-time legacy import prompt, then flush anything pending.
+      // The two pulls are guarded INDEPENDENTLY. They used to share one try,
+      // so a rejected progress request skipped the settings request entirely
+      // while readiness still settled -- and a pack switch could then overwrite
+      // cloud bookmarks/notes this device had never seen. Progress is still
+      // attempted first; settings is attempted regardless of its outcome.
+      var changed = 0, failedAny = false;
+      try { changed += await pullProgress(false); }
+      catch (e) { failedAny = true; }
+      try { changed += await pullSettings(); }
+      catch (e) { failedAny = true; }
       try {
-        var c = (await pullProgress(false)) + (await pullSettings());
-        if (c && window.HSK_APP) window.HSK_APP.reloadState();
-        uiState("Đã đồng bộ · " + shortTime());
-      } catch (e) {
-        uiState(navigator.onLine ? "Lỗi đồng bộ (thử lại sau)" : "Ngoại tuyến · sẽ đồng bộ sau");
-      }
+        if (changed && window.HSK_APP) window.HSK_APP.reloadState();
+      } catch (e) { failedAny = true; }
+      uiState(failedAny
+        ? (navigator.onLine ? "Lỗi đồng bộ (thử lại sau)" : "Ngoại tuyến · sẽ đồng bộ sau")
+        : "Đã đồng bộ · " + shortTime());
       readyResolve(true);            // settles before the legacy prompt blocks
       try { await maybeMigrateLegacy(); } catch (_) {}
       flush();

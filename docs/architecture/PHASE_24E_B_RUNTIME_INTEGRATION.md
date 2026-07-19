@@ -246,6 +246,49 @@ A bug found by these tests and fixed: in local-only mode the async body had no
 reentrancy guard before `switchPack()` returned, letting concurrent calls all
 execute. It now yields once before doing any work.
 
+## Current Gate closure: failure paths
+
+**The two pulls are guarded independently.** `start()` used to wrap
+`pullProgress(false)` and `pullSettings()` in one `try`, so a rejected progress
+request skipped the settings request entirely while readiness still settled --
+and a pack switch could then overwrite cloud bookmarks/notes this device had
+never seen. Progress is still attempted first, settings is attempted regardless
+of its outcome, `reloadState()` runs once if either successful pull changed
+state, and the offline/error UI string is driven by whether either attempt
+failed. Readiness still settles only after both attempts and before the
+legacy-import prompt. Observed with `card_progress` aborted:
+`order=['GET user_settings', 'POST push_settings']`, server bookmarks `[91,92]`
+preserved, and the later switch changed only `activePackId`.
+
+**A failed settings snapshot read is fail-closed.** `switchPack` reads the exact
+previous raw blob before anything else. A successful read returning `null` means
+"absent"; a THROW is different and returns `WRITE_FAILED` immediately. Swallowing
+it and continuing with `prevRaw = null` would mean a later save failure
+"restores" by deleting a blob that was never read -- destroying the user's
+settings. The snapshot now precedes `stopSpeech()`, which previously ran first,
+so a failed read no longer stops audio. Observed:
+`code=WRITE_FAILED saves=0 stops=0 boots=1`.
+
+**Save failure restores both copies.** If `saveSettings()` throws after the
+modified blob has already been persisted, the live property is restored exactly
+(including prior absence) and the previous raw blob is best-effort rewritten; no
+flush, no reload. Observed: `live=hsk rawRestored=True boots=1`.
+
+**The guard is latched through navigation.** An operation-local `reloadIssued`
+flag is set only after `location.reload()` returns, and `finally` clears
+`switching` only when it is false. The success promise resolves before navigation
+actually happens, so clearing the guard there would open a window in which a
+second call could save, flush and reload again on a document already on its way
+out. If `reload()` throws, the flag stays false and the guard clears normally.
+Observed in that exact window: `diff=SWITCH_IN_PROGRESS saves=1 stops=1 boots=2`.
+
+**Offline, timeout and retry.** A logged-in offline switch persists locally and
+reloads (`active=compatpack boots=2`). A hanging settings push times out at 3 s,
+reports `pushed=false` and reloads anyway, retaining the choice and SETTIME. A
+later page in the same browser context -- deliberately not reseeded -- inherits
+the persisted blob and the existing `flush()` path pushes it:
+`inherited=compatpack pushedActive=compatpack`.
+
 ## Service worker
 
 This phase required **two** bumps, not one. `v36 -> v37` added the boot assets

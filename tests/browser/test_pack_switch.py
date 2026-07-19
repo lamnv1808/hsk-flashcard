@@ -479,12 +479,264 @@ def run_account_isolation(ctx):
     page.close()
 
 
+def run_progress_failure_then_settings(ctx):
+    """A rejected progress pull must not skip the settings pull."""
+    compat = compat_pack_entry("1.0.0")
+    uid = "progfail"
+    skey = SETTINGS_BASE + "::" + uid
+    server = {"activePackId": "hsk", "bookmarks": [91, 92],
+              "notes": {"91": "srv"}, "unknownSrv": {"k": 1}}
+    pushed = []
+
+    def routes(route):
+        url = route.request.url
+        if "card_progress" in url:
+            return route.abort()                      # progress pull rejects
+        if "user_settings" in url:
+            return route.fulfill(status=200, content_type="application/json",
+                                 body=json.dumps([{"data": server,
+                                                   "updated_at": "2020-01-01T00:00:00.000Z"}]))
+        if "sync_push_settings" in url:
+            try: pushed.append(json.loads(route.request.post_data or "{}"))
+            except Exception: pushed.append({})
+            return route.fulfill(status=200, content_type="application/json", body="{}")
+        return route.fulfill(status=200, content_type="application/json", body="{}")
+
+    page = build_page(ctx, seed=account_seed(uid, '{"activePackId":"hsk","marker":"stale"}'),
+                      catalog_packs=[compat], app_version="2.5.0", routes=routes)
+    page.goto(BASE, wait_until="load")
+    page.wait_for_timeout(1500)
+    order = [w["key"] for w in page.evaluate("() => window.__WRITES") if w["op"] == "fetch"]
+    check("progress-fail: settings pull still requested",
+          "GET user_settings" in order)
+    blob = page.evaluate("(k) => JSON.parse(localStorage.getItem(k))", skey)
+    check("progress-fail: server settings accepted", blob.get("bookmarks") == [91, 92])
+    check("progress-fail: server notes preserved", blob.get("notes") == {"91": "srv"})
+    check("progress-fail: unknown server field preserved",
+          blob.get("unknownSrv") == {"k": 1})
+
+    page.evaluate("(t) => { window.HSKUtil.packBootShim.switchPack(t); }", COMPAT_ID)
+    page.wait_for_timeout(5000)
+    after = page.evaluate("(k) => JSON.parse(localStorage.getItem(k))", skey)
+    check("progress-fail: switch applied", after.get("activePackId") == COMPAT_ID)
+    check("progress-fail: switch changed ONLY activePackId",
+          after.get("bookmarks") == [91, 92] and after.get("notes") == {"91": "srv"}
+          and after.get("unknownSrv") == {"k": 1})
+    observed.append("E progress-reject: order=%s bookmarks=%s active=%s"
+                    % (order, after.get("bookmarks"), after.get("activePackId")))
+    check("progress-fail: no external request", page._escaped == [])
+    page.close()
+
+
+def run_readiness_variants(ctx):
+    """whenReady missing / throwing / rejecting -> SYNC_NOT_READY, no effects."""
+    compat = compat_pack_entry("1.0.0")
+    uid = "readyvar"
+    skey = SETTINGS_BASE + "::" + uid
+    seeded = '{"activePackId":"hsk"}'
+    # Each patch MUST be an explicit arrow function returning undefined. A bare
+    # assignment expression evaluates to the assigned function, which Playwright
+    # then invokes as the evaluation callback -- so "throws" would fire while
+    # installing the fixture rather than inside switchPack.
+    variants = [
+        ("() => { delete window.HSKSync.whenReady; }", "missing"),
+        ("() => { window.HSKSync.whenReady = function () {"
+         " throw new Error('boom'); }; }", "throws"),
+        ("() => { window.HSKSync.whenReady = function () {"
+         " return Promise.reject(new Error('nope')); }; }", "rejects"),
+    ]
+    for patch, label in variants:
+        page = build_page(ctx, seed=account_seed(uid, seeded),
+                          catalog_packs=[compat], app_version="2.5.0",
+                          routes=cloud_routes({"activePackId": "hsk"},
+                                              "2020-01-01T00:00:00.000Z", []))
+        page.goto(BASE, wait_until="load")
+        page.wait_for_timeout(800)
+        page.evaluate(patch)
+        res = page.evaluate("(t) => window.HSKUtil.packBootShim.switchPack(t)"
+                            ".then(r => r, e => ({thrown: String(e)}))", COMPAT_ID)
+        c = counters(page)
+        check("whenReady %s -> SYNC_NOT_READY" % label,
+              res.get("code") == "SYNC_NOT_READY")
+        check("whenReady %s -> no save" % label, c["saves"] == 0)
+        check("whenReady %s -> no speech stop" % label, c["stops"] == 0)
+        check("whenReady %s -> no reload" % label, c["boots"] == 1)
+        check("whenReady %s -> blob untouched" % label,
+              page.evaluate("(k) => JSON.parse(localStorage.getItem(k)).activePackId", skey) == "hsk")
+        observed.append("F whenReady-%s: code=%s saves=%d stops=%d boots=%d"
+                        % (label, res.get("code"), c["saves"], c["stops"], c["boots"]))
+        page.close()
+
+
+def run_offline_timeout_and_retry(ctx):
+    """Logged-in offline switch, push timeout, and the later flush retry."""
+    compat = compat_pack_entry("1.0.0")
+    uid = "offlineuser"
+    skey = SETTINGS_BASE + "::" + uid
+    settime = "hsk_sync_settime::" + uid
+    server = {"activePackId": "hsk", "bookmarks": [5]}
+
+    # --- push times out: reload still happens, choice retained --------------
+    pushed = []
+    page = build_page(ctx, seed=account_seed(uid, '{"activePackId":"hsk"}'),
+                      catalog_packs=[compat], app_version="2.5.0",
+                      routes=cloud_routes(server, "2020-01-01T00:00:00.000Z",
+                                          pushed, push_mode="hang"))
+    page.goto(BASE, wait_until="load")
+    page.evaluate("(t) => { window.HSKUtil.packBootShim.switchPack(t)"
+                  " .then(r => sessionStorage.setItem('__pushed', String(r.pushed))); }",
+                  COMPAT_ID)
+    page.wait_for_timeout(8000)
+    blob = page.evaluate("(k) => JSON.parse(localStorage.getItem(k))", skey)
+    check("push-timeout: choice persisted", blob.get("activePackId") == COMPAT_ID)
+    check("push-timeout: reloaded anyway", counters(page)["boots"] == 2)
+    check("push-timeout: reported pushed=false",
+          page.evaluate("() => sessionStorage.getItem('__pushed')") in ("false", None))
+    check("push-timeout: SETTIME retained for retry",
+          page.evaluate("(k) => localStorage.getItem(k)", settime) is not None)
+    observed.append("G push-timeout: active=%s boots=%d pushed=%s"
+                    % (blob.get("activePackId"), counters(page)["boots"],
+                       page.evaluate("() => sessionStorage.getItem('__pushed')")))
+    page.close()
+
+    # --- later flush retries the ALREADY-PERSISTED choice -------------------
+    # Deliberately NOT reseeded: this page reuses the same browser context, so
+    # it inherits the localStorage the timed-out switch above left behind. That
+    # is the whole point -- reseeding compatpack here would prove nothing.
+    retry = []
+    page = build_page(ctx, seed=None,
+                      catalog_packs=[compat], app_version="2.5.0",
+                      routes=cloud_routes(server, "2000-01-01T00:00:00.000Z", retry))
+    page.goto(BASE, wait_until="load")
+    inherited = page.evaluate("(k) => JSON.parse(localStorage.getItem(k) || 'null')", skey)
+    check("retry: inherited the persisted choice without reseeding",
+          inherited is not None and inherited.get("activePackId") == COMPAT_ID)
+    page.wait_for_timeout(1000)
+    page.evaluate("() => { if (window.HSKSync) window.HSKSync.flush(); }")
+    page.wait_for_timeout(2500)
+    check("retry: a later flush pushed the persisted choice", len(retry) >= 1)
+    if retry:
+        check("retry: pushed blob carries the switched pack",
+              retry[-1].get("p_data", {}).get("activePackId") == COMPAT_ID)
+    observed.append("H later-retry: inherited=%s pushes=%d pushedActive=%s"
+                    % (inherited.get("activePackId") if inherited else None,
+                       len(retry),
+                       retry[-1].get("p_data", {}).get("activePackId") if retry else None))
+    page.close()
+
+    # --- logged-in but offline: every request fails ------------------------
+    page = build_page(ctx, seed=account_seed(uid, '{"activePackId":"hsk","keep":1}'),
+                      catalog_packs=[compat], app_version="2.5.0",
+                      routes=lambda route: route.abort())
+    page.goto(BASE, wait_until="load")
+    page.evaluate("(t) => { window.HSKUtil.packBootShim.switchPack(t); }", COMPAT_ID)
+    page.wait_for_timeout(6000)
+    blob = page.evaluate("(k) => JSON.parse(localStorage.getItem(k))", skey)
+    check("offline: switch persisted locally", blob.get("activePackId") == COMPAT_ID)
+    check("offline: other keys preserved", blob.get("keep") == 1)
+    check("offline: reloaded", counters(page)["boots"] == 2)
+    observed.append("I offline: active=%s boots=%d"
+                    % (blob.get("activePackId"), counters(page)["boots"]))
+    page.close()
+
+
+def run_write_failures_and_latch(ctx):
+    """Snapshot-read failure, save failure rollback, and the navigation latch."""
+    compat = compat_pack_entry("1.0.0")
+    seeded = '{"activePackId":"hsk","bookmarks":[3],"note":""}'
+
+    # --- snapshot read throws -> fail closed BEFORE any side effect --------
+    page = build_page(ctx, seed={SETTINGS_BASE: seeded}, config=LOCAL_ONLY_CONFIG,
+                      catalog_packs=[compat], app_version="2.5.0")
+    page.goto(BASE, wait_until="load")
+    page.evaluate("""(k) => {
+        var proto = Object.getPrototypeOf(localStorage) || Storage.prototype;
+        var gi = proto.getItem;
+        proto.getItem = function (key) {
+            if (key === k) throw new Error('snapshot read denied');
+            return gi.call(this, key);
+        };
+        window.__restoreGet = function () { proto.getItem = gi; };
+    }""", SETTINGS_BASE)
+    res = page.evaluate("(t) => window.HSKUtil.packBootShim.switchPack(t)", COMPAT_ID)
+    c = counters(page)
+    page.evaluate("() => window.__restoreGet()")
+    check("snapshot-throw: WRITE_FAILED", res.get("code") == "WRITE_FAILED")
+    check("snapshot-throw: no speech stop", c["stops"] == 0)
+    check("snapshot-throw: no save", c["saves"] == 0)
+    check("snapshot-throw: no reload", c["boots"] == 1)
+    check("snapshot-throw: blob untouched",
+          page.evaluate("(k) => localStorage.getItem(k)", SETTINGS_BASE) == seeded)
+    observed.append("J snapshot-throw: code=%s saves=%d stops=%d boots=%d"
+                    % (res.get("code"), c["saves"], c["stops"], c["boots"]))
+    page.close()
+
+    # --- saveSettings throws AFTER partially persisting --------------------
+    page = build_page(ctx, seed={SETTINGS_BASE: seeded}, config=LOCAL_ONLY_CONFIG,
+                      catalog_packs=[compat], app_version="2.5.0")
+    page.goto(BASE, wait_until="load")
+    page.evaluate("""(k) => {
+        window.saveSettings = function () {
+            // Simulate a partially-completed persist: the modified blob is
+            // already on disk when the failure surfaces.
+            localStorage.setItem(k, JSON.stringify(window.HSK_APP.getSettings()));
+            throw new Error('quota exceeded');
+        };
+    }""", SETTINGS_BASE)
+    res = page.evaluate("(t) => window.HSKUtil.packBootShim.switchPack(t)", COMPAT_ID)
+    live = page.evaluate("() => window.HSK_APP.getSettings().activePackId")
+    raw = page.evaluate("(k) => localStorage.getItem(k)", SETTINGS_BASE)
+    c = counters(page)
+    check("save-throw: WRITE_FAILED", res.get("code") == "WRITE_FAILED")
+    check("save-throw: in-memory activePackId restored", live == "hsk")
+    check("save-throw: persisted blob restored exactly", raw == seeded)
+    check("save-throw: no reload", c["boots"] == 1)
+    observed.append("J2 save-throw: code=%s live=%s rawRestored=%s boots=%d"
+                    % (res.get("code"), live, raw == seeded, c["boots"]))
+    page.close()
+
+    # --- guard stays latched after reload is requested ---------------------
+    other = synth_pack("otherpack", 8000000, True, "launch", "launch")
+    page = build_page(ctx, seed={SETTINGS_BASE: '{"activePackId":"hsk"}'},
+                      config=LOCAL_ONLY_CONFIG, catalog_packs=[compat, other],
+                      app_version="2.5.0")
+    page.goto(BASE, wait_until="load")
+    latch = page.evaluate("""(ids) => {
+        var shim = window.HSKUtil.packBootShim;
+        // Await the SUCCESS result, then immediately try again in the window
+        // between promise resolution and the navigation actually happening.
+        return shim.switchPack(ids[0]).then(function (first) {
+            var again = shim.switchPack(ids[1]);   // different target
+            var same  = shim.switchPack(ids[0]);   // same target
+            return Promise.all([Promise.resolve(again), Promise.resolve(same)])
+              .then(function (r) {
+                  return { first: first, diff: r[0], sameIsPromise: !!r[1] };
+              });
+        });
+    }""", [COMPAT_ID, "otherpack"])
+    page.wait_for_timeout(2500)
+    c = counters(page)
+    check("latch: first switch succeeded", latch["first"]["ok"] is True)
+    check("latch: post-result different target -> SWITCH_IN_PROGRESS",
+          latch["diff"].get("code") == "SWITCH_IN_PROGRESS")
+    check("latch: still exactly one save", c["saves"] == 1)
+    check("latch: still exactly one speech stop", c["stops"] == 1)
+    check("latch: still exactly one reload", c["boots"] == 2)
+    check("latch: the first target won",
+          page.evaluate("() => window.HSKUtil.packBootShim.getActivePackId()") == COMPAT_ID)
+    observed.append("K latch: diff=%s saves=%d stops=%d boots=%d"
+                    % (latch["diff"].get("code"), c["saves"], c["stops"], c["boots"]))
+    page.close()
+
+
 def main():
     with sync_playwright() as pw:
         browser = pw.chromium.launch()
         for fn in (run_validation_classes, run_valid_switch_local_only,
                    run_readiness_and_flush, run_reentrancy_and_listener,
-                   run_account_isolation):
+                   run_account_isolation, run_progress_failure_then_settings,
+                   run_readiness_variants, run_offline_timeout_and_retry,
+                   run_write_failures_and_latch):
             ctx = make_ctx(browser)
             fn(ctx)
             ctx.close()
