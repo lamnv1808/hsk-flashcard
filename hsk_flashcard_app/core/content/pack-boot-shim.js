@@ -85,16 +85,24 @@
   }
 
   /*
-   * The stored activePackId, or null. Anything that is not a non-empty string
-   * is reported as null so the planner treats it as first-run rather than as a
-   * malformed request; genuinely malformed STRINGS are passed through so the
-   * planner can record the 'fallback-malformed-request' reason.
+   * The RAW stored activePackId, passed through untouched.
+   *
+   * This deliberately does no validation. planPackBoot already classifies the
+   * value -- absent/null/undefined/"" as first-run, any non-string or
+   * non-matching string as malformed, an unmatched valid id as unknown -- and
+   * records a distinct reason for each. Re-checking the shape here would create
+   * a second source of truth that can drift from the planner's, and it would
+   * silently collapse distinct outcomes: coercing a stored object or number to
+   * null would report it as a clean first run rather than as the corrupted
+   * storage it actually is.
+   *
+   * Only a missing/unreadable settings blob yields null, because then there is
+   * genuinely nothing stored.
    */
   function readActivePackId() {
     var blob = readJSON(settingsKey());
     if (!blob || typeof blob !== "object") return null;
-    var id = blob.activePackId;
-    return (typeof id === "string" && id.length) ? id : null;
+    return blob.activePackId;
   }
 
   function resolve() {
@@ -104,7 +112,12 @@
       var registry = NS.createPackRegistry(window.FLASHEDU_CATALOG);
       var plan = NS.planPackBoot({
         registry: registry,
-        requestedPackId: readActivePackId()
+        requestedPackId: readActivePackId(),
+        // The app version comes from the VALIDATED catalog, never a literal
+        // here. Without it every pack declaring a minAppVersion would be
+        // treated as incompatible and silently hidden, because isCompatible()
+        // fails closed on a non-string version.
+        appVersion: registry.getAppVersion()
       });
       if (!plan || plan.ok !== true) {
         state.error = (plan && plan.error) ||

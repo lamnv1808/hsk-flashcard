@@ -41,6 +41,86 @@ def new_page(ctx):
     return page, errors
 
 
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+APP = os.path.join(ROOT, "hsk_flashcard_app")
+HEX64 = "0" * 64
+
+
+def read_real_catalog():
+    """Parse the SHIPPED catalog as data. Never executed, never modified."""
+    with open(os.path.join(APP, "packs", "catalog.js"), encoding="utf-8") as fh:
+        src = fh.read()
+    body = src[src.index("{", src.index("window.FLASHEDU_CATALOG")):].rstrip()
+    return json.loads(body[:body.rindex("}") + 1])
+
+
+def synth_pack(pack_id, id_min, visible, readiness, status, min_app_version=None):
+    """A synthetic catalog entry. TEST-ONLY -- never written to any app file."""
+    pack = {
+        "packId": pack_id, "version": "1.0.0", "title": pack_id.upper(),
+        "courseId": pack_id, "courseType": "general", "status": status,
+        "languageProfile": {"target": "en"},
+        "idRange": {"min": id_min, "max": id_min + 999999},
+        "allocated": {"count": 0, "min": None, "max": None},
+        "launch": {"visible": visible, "readiness": readiness},
+        "sourceChecksum": "sha256:" + HEX64,
+        "contentChecksum": "sha256:" + HEX64,
+        "manifestPath": "packs/%s/%s-content-pack.js" % (pack_id, pack_id),
+        "cardsPath": "packs/%s/%s-cards.js" % (pack_id, pack_id),
+    }
+    if min_app_version:
+        pack["minAppVersion"] = min_app_version
+    return pack
+
+
+def catalog_page(ctx, extra_packs, app_version=None, stored=None, alias=None):
+    """Boot with a synthetic catalog served in place of the shipped one.
+
+    The real packs/catalog.js on disk is untouched; only this page's request for
+    it is fulfilled with the variant. `alias` maps a synthetic pack's payload
+    paths onto the real HSK runtime files, so a page that legitimately selects
+    that pack still boots a complete dataset instead of 404ing.
+    """
+    cat = read_real_catalog()
+    cat["packs"] = list(cat["packs"]) + list(extra_packs)
+    if app_version:
+        cat["appVersion"] = app_version
+    body = ("// test-only synthetic catalog\nwindow.FLASHEDU_CATALOG = %s;\n"
+            % json.dumps(cat))
+
+    page, errors = new_page(ctx)
+    page.route("**/packs/catalog.js", lambda route: route.fulfill(
+        status=200, content_type="application/javascript", body=body))
+
+    if alias:
+        def serve(real_rel):
+            with open(os.path.join(APP, real_rel.replace("/", os.sep)),
+                      encoding="utf-8") as fh:
+                content = fh.read()
+            return lambda route: route.fulfill(
+                status=200, content_type="application/javascript", body=content)
+        page.route("**/" + alias["cardsPath"], serve("data.js"))
+        page.route("**/" + alias["manifestPath"],
+                   serve("packs/hsk/hsk-content-pack.js"))
+
+    if stored is not None:
+        page.add_init_script(
+            "try{localStorage.setItem('hsk_flashcard_settings_v2',%s);}catch(e){}"
+            % json.dumps(json.dumps({"activePackId": stored})))
+    page.goto(BASE, wait_until="load")
+    return page, errors
+
+
+def boot_blob(ctx, blob):
+    """Boot with an arbitrary settings blob written before the document parses."""
+    page, errors = new_page(ctx)
+    page.add_init_script(
+        "try{localStorage.setItem('hsk_flashcard_settings_v2',%s);}catch(e){}"
+        % json.dumps(json.dumps(blob)))
+    page.goto(BASE, wait_until="load")
+    return page, errors
+
+
 def boot(ctx, active_pack_id="__unset__"):
     """Load the app with a given stored activePackId; return (page, errors)."""
     page, errors = new_page(ctx)
@@ -163,22 +243,36 @@ def run(browser_name, launcher):
     check(tag + "no errors after starting study", errors == [])
     page.close()
 
-    # --------------------------------------------------------- fallback cases
-    # Every one of these must still boot HSK with a full dataset. "Never boot
-    # empty" is the invariant: an empty dataset looks like data loss to a user.
-    for stored, label, expected_reason in [
-        ("hsk", "stored hsk", "requested"),
-        ("ielts", "unknown pack", "fallback-unknown-pack"),
-        ("../evil", "malformed pack id", "fallback-malformed-request"),
-        ("NOT A PACK", "malformed pack id (spaces)", "fallback-malformed-request"),
-        ("", "empty string", "default-first-run"),
+    # ---------------------------------------------------- activePackId matrix
+    # The shim passes the stored value through RAW; planPackBoot owns the
+    # classification. These cases pin the distinction that matters: an absent
+    # setting is a clean first run, but a stored object/number/boolean is
+    # CORRUPTED STORAGE and must be reported as such rather than laundered into
+    # a first run. Every case must still boot one complete pack.
+    for blob, label, expected_reason in [
+        ({}, "missing property", "default-first-run"),
+        ({"activePackId": None}, "null", "default-first-run"),
+        ({"activePackId": ""}, "empty string", "default-first-run"),
+        ({"activePackId": {"oops": True}}, "object", "fallback-malformed-request"),
+        ({"activePackId": ["hsk"]}, "array", "fallback-malformed-request"),
+        ({"activePackId": 42}, "number", "fallback-malformed-request"),
+        ({"activePackId": True}, "boolean", "fallback-malformed-request"),
+        ({"activePackId": "../evil"}, "malformed string", "fallback-malformed-request"),
+        ({"activePackId": "NOT A PACK"}, "malformed string (spaces)",
+         "fallback-malformed-request"),
+        ({"activePackId": "ielts"}, "unknown valid string", "fallback-unknown-pack"),
+        ({"activePackId": "hsk"}, "stored hsk", "requested"),
     ]:
-        p, errs = boot(ctx, stored)
+        p, errs = boot_blob(ctx, blob)
         got = p.evaluate("""() => ({
             active: window.HSKUtil.packBootShim.getActivePackId(),
             reason: window.HSKUtil.packBootShim.getBootReason(),
             cards:  window.HSKUtil.cards.count(),
-            error:  window.HSKUtil.packBootShim.getError()
+            error:  window.HSKUtil.packBootShim.getError(),
+            wrote:  window.HSKUtil.packBootShim.didWrite(),
+            payloads: document.querySelectorAll('script[src="data.js"]').length,
+            manifests: document.querySelectorAll(
+                'script[src="packs/hsk/hsk-content-pack.js"]').length
         })""")
         check(tag + "%s boots hsk" % label, got["active"] == "hsk")
         check(tag + "%s reason is %s" % (label, expected_reason),
@@ -186,20 +280,82 @@ def run(browser_name, launcher):
         check(tag + "%s is never empty" % label, got["cards"] == 5002)
         check(tag + "%s has no boot error" % label, got["error"] is None)
         check(tag + "%s has no console errors" % label, errs == [])
+        # One complete pack, never partial and never doubled.
+        check(tag + "%s wrote both payloads once" % label,
+              got["wrote"] == {"cards": True, "manifest": True})
+        check(tag + "%s inserted exactly one cards payload" % label,
+              got["payloads"] == 1)
+        check(tag + "%s inserted exactly one manifest" % label,
+              got["manifests"] == 1)
         p.close()
 
-    # A non-string activePackId (corrupted storage) must behave as first run.
-    p, errs = new_page(ctx)
-    p.add_init_script(
-        "try{localStorage.setItem('hsk_flashcard_settings_v2',"
-        "JSON.stringify({activePackId:{oops:true}}));}catch(e){}")
-    p.goto(BASE, wait_until="load")
-    check(tag + "non-string activePackId boots hsk",
-          p.evaluate("() => window.HSKUtil.packBootShim.getActivePackId()") == "hsk")
-    check(tag + "non-string activePackId is never empty",
-          p.evaluate("() => window.HSKUtil.cards.count()") == 5002)
+    # ------------------------------------- hidden / incompatible / appVersion
+    # A DEDICATED context with service workers blocked. Earlier boots in
+    # `ctx` registered the v37 worker, which then serves the precached
+    # packs/catalog.js cache-first and bypasses page.route entirely -- the
+    # synthetic catalog would silently never be applied.
+    sctx = browser.new_context(service_workers="block")
+    # A hidden pack is present in the catalog but not offered.
+    hidden = synth_pack("hiddenpack", 5000000, False, "internal", "draft")
+    p, errs = catalog_page(sctx, [hidden], stored="hiddenpack")
+    got = p.evaluate("""() => ({
+        active: window.HSKUtil.packBootShim.getActivePackId(),
+        reason: window.HSKUtil.packBootShim.getBootReason(),
+        cards:  window.HSKUtil.cards.count()
+    })""")
+    check(tag + "hidden pack falls back to hsk", got["active"] == "hsk")
+    check(tag + "hidden pack reason", got["reason"] == "fallback-not-launch-visible")
+    check(tag + "hidden pack fallback is complete", got["cards"] == 5002)
+    check(tag + "hidden pack boot has no console errors", errs == [])
     p.close()
 
+    # A launch-visible pack that needs a NEWER app than the catalog declares.
+    incompat = synth_pack("futurepack", 6000000, True, "launch", "launch",
+                          min_app_version="99.0.0")
+    p, errs = catalog_page(sctx, [incompat], app_version="1.0.0",
+                           stored="futurepack")
+    got = p.evaluate("""() => ({
+        active: window.HSKUtil.packBootShim.getActivePackId(),
+        reason: window.HSKUtil.packBootShim.getBootReason(),
+        cards:  window.HSKUtil.cards.count()
+    })""")
+    check(tag + "incompatible pack falls back to hsk", got["active"] == "hsk")
+    check(tag + "incompatible pack reason",
+          got["reason"] == "fallback-incompatible-app-version")
+    check(tag + "incompatible fallback is complete", got["cards"] == 5002)
+    check(tag + "incompatible boot has no console errors", errs == [])
+    p.close()
+
+    # THE appVersion PROOF. This pack's minAppVersion is SATISFIED by the
+    # catalog's appVersion, so it must be selectable. If the shim failed to
+    # pass appVersion through, isCompatible() would fail closed on undefined
+    # and this would come back as 'fallback-incompatible-app-version' instead
+    # of 'requested' -- so this case, and only this case, distinguishes the two.
+    compat = synth_pack("compatpack", 7000000, True, "launch", "launch",
+                        min_app_version="1.0.0")
+    p, errs = catalog_page(sctx, [compat], app_version="2.5.0",
+                           stored="compatpack", alias=compat)
+    got = p.evaluate("""() => ({
+        active: window.HSKUtil.packBootShim.getActivePackId(),
+        reason: window.HSKUtil.packBootShim.getBootReason(),
+        cards:  window.HSKUtil.cards.count(),
+        error:  window.HSKUtil.packBootShim.getError()
+    })""")
+    check(tag + "compatible pack IS selected", got["active"] == "compatpack")
+    check(tag + "compatible pack reason is requested",
+          got["reason"] == "requested")
+    check(tag + "compatible pack boots a complete dataset", got["cards"] == 5002)
+    check(tag + "compatible pack has no boot error", got["error"] is None)
+    # No mixing: only the selected pack's payloads were inserted.
+    srcs = p.evaluate("""() => Array.prototype.map.call(
+        document.querySelectorAll('script[src]'), s => s.getAttribute('src'))""")
+    check(tag + "selected pack payload inserted once",
+          srcs.count(compat["cardsPath"]) == 1)
+    check(tag + "no HSK payload inserted alongside it",
+          srcs.count("data.js") == 0)
+    p.close()
+
+    sctx.close()
     ctx.close()
     browser.close()
 
