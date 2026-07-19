@@ -53,13 +53,33 @@ def check(name, cond):
 
 # --------------------------------------------------------------- primitives
 
-def sha256_file(abs_path):
+def canonical_bytes(abs_path, binary=False):
+    """Bytes as the repository canonically stores them (LF), not as checked out.
+
+    core.autocrlf can hand us a CRLF working copy of a text file whose committed
+    blob is LF (.gitattributes now pins eol=lf, but an already-checked-out tree
+    keeps its CRLF until it is rewritten). Hashing the raw working copy would
+    therefore embed a PLATFORM-DEPENDENT checksum in the catalog: generated on
+    Windows it recorded hsk-content-pack.js as 5486 bytes, but a fresh clone
+    serves the same file as 5386 bytes. The catalog would then disagree with the
+    bytes actually deployed.
+
+    Normalizing CRLF -> LF for text assets makes generation reproducible on any
+    platform and matches what git stores and what a clone/deploy serves.
+    Binary assets (the workbook) are hashed verbatim -- normalizing them would
+    corrupt the hash.
+    """
     with open(abs_path, "rb") as fh:
-        return hashlib.sha256(fh.read()).hexdigest()
+        data = fh.read()
+    return data if binary else data.replace(b"\r\n", b"\n")
 
 
-def file_bytes(abs_path):
-    return os.path.getsize(abs_path)
+def sha256_file(abs_path, binary=False):
+    return hashlib.sha256(canonical_bytes(abs_path, binary)).hexdigest()
+
+
+def file_bytes(abs_path, binary=False):
+    return len(canonical_bytes(abs_path, binary))
 
 
 def js_json(obj):
@@ -203,7 +223,8 @@ def build_entry(src, app_root):
         "cardsPath": src["cardsPath"],
         "cardsGlobal": src["cardsGlobal"],
         "contentChecksum": "sha256:" + sha256_file(cards_abs),
-        "sourceChecksum": "sha256:" + sha256_file(source_abs),
+        # The workbook is binary: hashed verbatim, never newline-normalized.
+        "sourceChecksum": "sha256:" + sha256_file(source_abs, binary=True),
         # Additive provenance honesty. pack-registry.js ignores unknown keys;
         # these exist so nobody later mistakes a workbook hash for a CSI hash.
         "install": {
@@ -320,6 +341,33 @@ def main():
           all(set(r.keys()) == {"id", "level", "word", "pinyin", "meaning",
                                 "example", "examplePinyin", "translation"}
               for r in rows))
+
+    # --- generation is independent of working-tree line endings -----------
+    # A CRLF checkout must produce the SAME catalog as an LF checkout, or the
+    # embedded runtime-asset checksums disagree with what a clone deploys.
+    import tempfile
+    manifest_rel = LEGACY_SOURCES[0]["manifestPath"]
+    manifest_abs = os.path.join(APP_ROOT, manifest_rel)
+    lf = canonical_bytes(manifest_abs)
+    # Both forms are written explicitly, because the checked-out copy of
+    # manifest_abs may itself be CRLF or LF depending on the platform.
+    with tempfile.TemporaryDirectory() as tmp:
+        crlf_path = os.path.join(tmp, "crlf.js")
+        lf_path = os.path.join(tmp, "lf.js")
+        with open(crlf_path, "wb") as fh:
+            fh.write(lf.replace(b"\n", b"\r\n"))
+        with open(lf_path, "wb") as fh:
+            fh.write(lf)
+        check("checksum ignores CRLF vs LF",
+              sha256_file(crlf_path) == sha256_file(lf_path))
+        check("byte count ignores CRLF vs LF",
+              file_bytes(crlf_path) == file_bytes(lf_path))
+        check("the catalog records the LF byte count",
+              file_bytes(lf_path) == len(lf))
+        # ...but binary hashing must NOT normalize, or workbook hashes break.
+        check("binary hashing does not normalize",
+              sha256_file(crlf_path, binary=True) !=
+              sha256_file(lf_path, binary=True))
 
     # --- path validation is generic and fails closed ----------------------
     for bad, label in [
