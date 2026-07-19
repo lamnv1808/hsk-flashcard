@@ -115,6 +115,10 @@ GROUPS = {
         "tests/data/test_pack_promotion.py",
         "tests/data/test_pack_foundation_isolation.py",
     ],
+    "Pack runtime integration (Phase 24E-B)": [
+        "tests/data/test_pack_catalog_legacy.py",
+        "tests/browser/test_pack_catalog_runtime.py",
+    ],
 }
 
 def free_port():

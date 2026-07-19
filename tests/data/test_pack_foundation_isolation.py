@@ -13,6 +13,7 @@ alongside it -- it failing is the intended signal that integration happened.
 """
 
 import hashlib
+import json
 import os
 import re
 import sys
@@ -31,7 +32,15 @@ EXPECTED_CACHE = "hsk-flashcards-v36"
 EXPECTED_ASSET_COUNT = 36
 
 # Fixture identifiers that must never reach the shipped app.
-SYNTHETIC_MARKERS = ("synth-en", "SynthEN", "Synthetic English", "FLASHEDU_CATALOG")
+# Phase 24E-B: FLASHEDU_CATALOG was removed from this list. In Phase 24E-A the
+# catalog global was proof that the unwired foundation had leaked into
+# production; from 24E-B it IS the production runtime catalog. The synthetic
+# fixture guards below are unchanged -- no test/synthetic pack content ships.
+SYNTHETIC_MARKERS = ("synth-en", "SynthEN", "Synthetic English")
+
+# Launch options that must not appear until real, validated content exists
+# (Phase 24F). A "coming soon" option is a product lie, so it fails here.
+UNSHIPPED_COURSE_MARKERS = ("ielts", "toeic", "jlpt", "topik")
 
 
 def read(path):
@@ -120,13 +129,46 @@ def main():
     if leaks:
         fails.append("leaks: %s" % leaks[:5])
 
-    # --- no production catalog or non-HSK pack yet --------------------------
+    # --- packs/ holds exactly the catalog and the HSK adapter ---------------
+    # Phase 24E-B adds the production catalog. Anything BEYOND catalog.js and
+    # hsk/ is still a failure: a stray synthetic pack, or an IELTS/TOEIC/JLPT/
+    # TOPIK directory shipped before Phase 24F has real validated content.
     packs_dir = os.path.join(APP, "packs")
     entries = sorted(os.listdir(packs_dir)) if os.path.isdir(packs_dir) else []
-    check("packs/ still contains only the HSK adapter directory",
-          entries == ["hsk"])
-    check("no production catalog.js exists yet",
-          not os.path.isfile(os.path.join(packs_dir, "catalog.js")))
+    check("packs/ contains exactly catalog.js and the HSK adapter directory",
+          entries == ["catalog.js", "hsk"])
+
+    # --- the production catalog is present and HSK-only (Phase 24E-B) -------
+    catalog_path = os.path.join(packs_dir, "catalog.js")
+    check("packs/catalog.js exists", os.path.isfile(catalog_path))
+    if os.path.isfile(catalog_path):
+        catalog_src = read(catalog_path)
+        check("catalog.js declares window.FLASHEDU_CATALOG",
+              "window.FLASHEDU_CATALOG" in catalog_src)
+
+        # Parse the assignment as data; never execute it.
+        body = catalog_src[catalog_src.index("{", catalog_src.index(
+            "window.FLASHEDU_CATALOG")):].rstrip()
+        catalog = json.loads(body[:body.rindex("}") + 1])
+
+        visible = [p for p in catalog.get("packs", [])
+                   if p.get("launch", {}).get("visible") is True]
+        check("catalog declares exactly one launch-visible pack",
+              len(visible) == 1)
+        check("the only launch-visible pack is hsk",
+              [p["packId"] for p in visible] == ["hsk"])
+        check("catalog references the legacy cards payload data.js",
+              any(p.get("cardsPath") == "data.js" for p in visible))
+        check("catalog references the legacy HSK adapter",
+              any(p.get("manifestPath") == "packs/hsk/hsk-content-pack.js"
+                  for p in visible))
+
+        lowered = catalog_src.lower()
+        check("catalog contains no synthetic fixture identifier",
+              not any(m.lower() in lowered for m in SYNTHETIC_MARKERS))
+        # No fake/"coming soon" launch options before Phase 24F.
+        check("catalog offers no unshipped IELTS/TOEIC/JLPT/TOPIK option",
+              not any(m in lowered for m in UNSHIPPED_COURSE_MARKERS))
 
     # --- release tooling is untouched ---------------------------------------
     checker = os.path.join(ROOT, "scripts", "release_check.py")
