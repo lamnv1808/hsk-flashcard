@@ -73,13 +73,17 @@ def synth_pack(pack_id, id_min, visible, readiness, status, min_app_version=None
     return pack
 
 
-def catalog_page(ctx, extra_packs, app_version=None, stored=None, alias=None):
+def catalog_page(ctx, extra_packs, app_version=None, stored=None, payloads=None):
     """Boot with a synthetic catalog served in place of the shipped one.
 
     The real packs/catalog.js on disk is untouched; only this page's request for
-    it is fulfilled with the variant. `alias` maps a synthetic pack's payload
-    paths onto the real HSK runtime files, so a page that legitimately selects
-    that pack still boots a complete dataset instead of 404ing.
+    it is fulfilled with the variant. `payloads` maps a synthetic pack's own
+    runtime paths to test-only JavaScript, so a page that legitimately selects
+    that pack executes THAT pack's cards and manifest.
+
+    Everything else is production: index.html, pack-registry.js, pack-boot.js,
+    pack-boot-shim.js, its document.write insertion points, content-pack.js and
+    card-repository.js all run unmodified. Nothing here is mocked.
     """
     cat = read_real_catalog()
     cat["packs"] = list(cat["packs"]) + list(extra_packs)
@@ -92,16 +96,11 @@ def catalog_page(ctx, extra_packs, app_version=None, stored=None, alias=None):
     page.route("**/packs/catalog.js", lambda route: route.fulfill(
         status=200, content_type="application/javascript", body=body))
 
-    if alias:
-        def serve(real_rel):
-            with open(os.path.join(APP, real_rel.replace("/", os.sep)),
-                      encoding="utf-8") as fh:
-                content = fh.read()
-            return lambda route: route.fulfill(
-                status=200, content_type="application/javascript", body=content)
-        page.route("**/" + alias["cardsPath"], serve("data.js"))
-        page.route("**/" + alias["manifestPath"],
-                   serve("packs/hsk/hsk-content-pack.js"))
+    for rel, js in (payloads or {}).items():
+        page.route("**/" + rel,
+                   (lambda text: lambda route: route.fulfill(
+                       status=200, content_type="application/javascript",
+                       body=text))(js))
 
     if stored is not None:
         page.add_init_script(
@@ -109,6 +108,91 @@ def catalog_page(ctx, extra_packs, app_version=None, stored=None, alias=None):
             % json.dumps(json.dumps({"activePackId": stored})))
     page.goto(BASE, wait_until="load")
     return page, errors
+
+
+# --------------------------------------------------------------------------
+# A COHERENT test-only pack. Catalog entry, cards payload and manifest all
+# agree on packId, courseId, paths, idRange, allocated range and actual card
+# ids. An earlier version of this suite aliased these paths onto the real HSK
+# files, which meant the planner selected 'compatpack' while the executed
+# manifest constructed 'hsk' with ids 1-5002 -- so the "one complete,
+# non-mixed pack" claim was false even though the test was green. This fixture
+# exists so that claim is actually true.
+# --------------------------------------------------------------------------
+COMPAT_ID = "compatpack"
+COMPAT_RANGE = {"min": 7000000, "max": 7999999}
+COMPAT_CARDS = [
+    {"id": 7000000 + i, "level": "CP1" if i < 3 else "CP2",
+     "word": "word%d" % i, "pinyin": "pron%d" % i, "meaning": "meaning%d" % i,
+     "example": "example%d" % i, "examplePinyin": "exPron%d" % i,
+     "translation": "exMeaning%d" % i}
+    for i in range(6)
+]
+COMPAT_ALLOCATED = {"count": len(COMPAT_CARDS),
+                    "min": COMPAT_CARDS[0]["id"],
+                    "max": COMPAT_CARDS[-1]["id"]}
+COMPAT_CARDS_PATH = "packs/%s/%s-cards.js" % (COMPAT_ID, COMPAT_ID)
+COMPAT_MANIFEST_PATH = "packs/%s/%s-content-pack.js" % (COMPAT_ID, COMPAT_ID)
+
+COMPAT_CARDS_JS = ("// test-only cards payload\nwindow.COMPATPACK_CARDS = %s;\n"
+                   % json.dumps(COMPAT_CARDS))
+
+# Mirrors the shape of packs/hsk/hsk-content-pack.js: it calls the REAL
+# NS.createContentPack and publishes NS.contentPack, so ContentPack validation
+# and CardRepository construction are exercised for real.
+COMPAT_MANIFEST_JS = """
+(function (NS) {
+  "use strict";
+  var CI = NS.cardIndex;
+  var FIELD_ROLES = {
+    primaryPrompt: "word", pronunciation: "pinyin", definition: "meaning",
+    exampleText: "example", examplePronunciation: "examplePinyin",
+    exampleTranslation: "translation", deck: "level", stableId: "id"
+  };
+  function deckProvider(cards) {
+    var byDeck = CI.buildCardsByLevel(cards);
+    var ids = [];
+    for (var k in byDeck) if (Object.prototype.hasOwnProperty.call(byDeck, k)) ids.push(k);
+    ids.sort();
+    return ids.map(function (id, i) {
+      return { id: id, order: i + 1, title: id, cardCount: byDeck[id].length };
+    });
+  }
+  var pack = NS.createContentPack({
+    id: "__ID__", version: "1.0.0", title: "__TITLE__",
+    languages: { prompt: "en", meaning: "en" },
+    capabilities: ["study", "srs", "test"],
+    fieldRoles: FIELD_ROLES,
+    testModes: [{ id: 1, label: "Word to meaning", q: "word", a: ["meaning"] }],
+    deckProvider: deckProvider,
+    getCards: function () { return window.COMPATPACK_CARDS || []; },
+    schemaVersion: 1, packId: "__ID__", status: "launch",
+    courseId: "__ID__", courseType: "general",
+    languageProfile: { target: "en" },
+    idRange: { min: __MIN__, max: __MAX__ }
+  });
+  NS.contentPack = pack;
+})(window.HSKUtil = window.HSKUtil || {});
+""".replace("__ID__", COMPAT_ID).replace("__TITLE__", COMPAT_ID.upper()) \
+   .replace("__MIN__", str(COMPAT_RANGE["min"])) \
+   .replace("__MAX__", str(COMPAT_RANGE["max"]))
+
+
+def compat_pack_entry(min_app_version):
+    """The catalog entry, built from the SAME constants as the payloads."""
+    return {
+        "packId": COMPAT_ID, "version": "1.0.0", "title": COMPAT_ID.upper(),
+        "courseId": COMPAT_ID, "courseType": "general", "status": "launch",
+        "languageProfile": {"target": "en"},
+        "idRange": dict(COMPAT_RANGE),
+        "allocated": dict(COMPAT_ALLOCATED),
+        "launch": {"visible": True, "readiness": "launch"},
+        "sourceChecksum": "sha256:" + HEX64,
+        "contentChecksum": "sha256:" + HEX64,
+        "manifestPath": COMPAT_MANIFEST_PATH,
+        "cardsPath": COMPAT_CARDS_PATH,
+        "minAppVersion": min_app_version,
+    }
 
 
 def boot_blob(ctx, blob):
@@ -331,28 +415,71 @@ def run(browser_name, launcher):
     # pass appVersion through, isCompatible() would fail closed on undefined
     # and this would come back as 'fallback-incompatible-app-version' instead
     # of 'requested' -- so this case, and only this case, distinguishes the two.
-    compat = synth_pack("compatpack", 7000000, True, "launch", "launch",
-                        min_app_version="1.0.0")
-    p, errs = catalog_page(sctx, [compat], app_version="2.5.0",
-                           stored="compatpack", alias=compat)
-    got = p.evaluate("""() => ({
-        active: window.HSKUtil.packBootShim.getActivePackId(),
-        reason: window.HSKUtil.packBootShim.getBootReason(),
-        cards:  window.HSKUtil.cards.count(),
-        error:  window.HSKUtil.packBootShim.getError()
-    })""")
-    check(tag + "compatible pack IS selected", got["active"] == "compatpack")
-    check(tag + "compatible pack reason is requested",
-          got["reason"] == "requested")
-    check(tag + "compatible pack boots a complete dataset", got["cards"] == 5002)
+    compat = compat_pack_entry(min_app_version="1.0.0")
+    p, errs = catalog_page(
+        sctx, [compat], app_version="2.5.0", stored=COMPAT_ID,
+        payloads={COMPAT_CARDS_PATH: COMPAT_CARDS_JS,
+                  COMPAT_MANIFEST_PATH: COMPAT_MANIFEST_JS})
+
+    got = p.evaluate("""() => {
+        var shim = window.HSKUtil.packBootShim;
+        var plan = shim.getPlan();
+        var pack = window.HSKUtil.contentPack;
+        var all  = window.HSKUtil.cards.getAll();
+        return {
+            active:   shim.getActivePackId(),
+            reason:   shim.getBootReason(),
+            error:    shim.getError(),
+            expected: plan ? { cardsPath: plan.expected.cardsPath,
+                               manifestPath: plan.expected.manifestPath } : null,
+            packId:   pack.getPackId(),
+            idRange:  pack.getIdRange(),
+            validation: pack.validate(),
+            count:    window.HSKUtil.cards.count(),
+            ids:      all.map(function (c) { return c.id; }),
+            hskCards: typeof window.HSK_CARDS
+        };
+    }""")
+
+    # --- the planner selected it, using the forwarded appVersion -----------
+    check(tag + "compatible pack IS selected", got["active"] == COMPAT_ID)
+    check(tag + "compatible pack reason is requested", got["reason"] == "requested")
     check(tag + "compatible pack has no boot error", got["error"] is None)
-    # No mixing: only the selected pack's payloads were inserted.
+    check(tag + "plan expects the compatpack cards path",
+          got["expected"]["cardsPath"] == COMPAT_CARDS_PATH)
+    check(tag + "plan expects the compatpack manifest path",
+          got["expected"]["manifestPath"] == COMPAT_MANIFEST_PATH)
+
+    # --- the pack that actually CONSTRUCTED is the one selected -----------
+    check(tag + "constructed ContentPack is compatpack", got["packId"] == COMPAT_ID)
+    check(tag + "ContentPack idRange equals the catalog range",
+          got["idRange"] == COMPAT_RANGE)
+    check(tag + "ContentPack validation is green",
+          got["validation"].get("ok") is True)
+    check(tag + "ContentPack validation reports no errors",
+          got["validation"].get("errors") == [])
+
+    # --- the cards that actually LOADED are the ones declared -------------
+    check(tag + "CardRepository count equals catalog allocated.count",
+          got["count"] == COMPAT_ALLOCATED["count"])
+    check(tag + "every card id lies inside the compatpack idRange",
+          all(COMPAT_RANGE["min"] <= i <= COMPAT_RANGE["max"] for i in got["ids"]))
+    check(tag + "loaded ids match the declared allocated span",
+          min(got["ids"]) == COMPAT_ALLOCATED["min"] and
+          max(got["ids"]) == COMPAT_ALLOCATED["max"])
+
+    # --- nothing from HSK came along --------------------------------------
+    check(tag + "no HSK cards global exists", got["hskCards"] == "undefined")
     srcs = p.evaluate("""() => Array.prototype.map.call(
         document.querySelectorAll('script[src]'), s => s.getAttribute('src'))""")
-    check(tag + "selected pack payload inserted once",
-          srcs.count(compat["cardsPath"]) == 1)
-    check(tag + "no HSK payload inserted alongside it",
-          srcs.count("data.js") == 0)
+    check(tag + "exactly one compatpack cards payload executed",
+          srcs.count(COMPAT_CARDS_PATH) == 1)
+    check(tag + "exactly one compatpack manifest executed",
+          srcs.count(COMPAT_MANIFEST_PATH) == 1)
+    check(tag + "no data.js script inserted", srcs.count("data.js") == 0)
+    check(tag + "no HSK manifest script inserted",
+          srcs.count("packs/hsk/hsk-content-pack.js") == 0)
+    check(tag + "compatible pack boot has no console errors", errs == [])
     p.close()
 
     sctx.close()
