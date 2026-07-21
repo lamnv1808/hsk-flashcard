@@ -40,13 +40,58 @@ fails = []
 observed = []
 
 
+def ascii_safe(text):
+    """Render diagnostics so a default Windows cp1252 console cannot crash them.
+
+    The app's UI strings are Vietnamese, so observed values legitimately carry
+    non-ASCII (the inline switch error is "Khong the doi khoa hoc ..." with
+    diacritics). Printing that straight to a cp1252 stdout raises
+    UnicodeEncodeError AFTER every assertion has already run, turning a passing
+    suite into a spurious failure -- and the exception tears the Playwright loop
+    down mid-flight, which surfaced as a confusing CancelledError.
+
+    Escaping rather than stripping keeps the information: a character that cp1252
+    cannot represent appears as its \\uXXXX escape instead of being dropped.
+    """
+    return str(text).encode("ascii", "backslashreplace").decode("ascii")
+
+
+def start_blackhole():
+    """A local listener that ACCEPTS connections and never answers.
+
+    The readiness-timeout case needs an initial pull that never settles. Doing
+    that with a Playwright route means leaving a route handler un-fulfilled, and
+    closing the page then cancels its future -- asyncio reports that as a
+    CancelledError, which looks like a real fault but is pure teardown noise.
+    Hanging at the socket layer instead keeps the scenario identical with no
+    dangling handler at all.
+    """
+    import socket, threading
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(16)
+    held = []
+
+    def loop():
+        while True:
+            try:
+                conn, _ = srv.accept()
+                held.append(conn)          # hold it open, send nothing
+            except OSError:
+                break
+
+    threading.Thread(target=loop, daemon=True).start()
+    return srv.getsockname()[1], srv, held
+
+
 def check(name, cond):
     if not cond:
         fails.append(name)
 
 
 def build_page(ctx, packs=None, stored="__unset__", config=LOCAL_ONLY,
-               payloads=True, routes=None):
+               payloads=True, routes=None, allow_origin=None):
     page = ctx.new_page()
     errors, escaped = [], []
     origin = BASE.rsplit("/hsk_flashcard_app/", 1)[0]
@@ -54,7 +99,8 @@ def build_page(ctx, packs=None, stored="__unset__", config=LOCAL_ONLY,
     page.on("console", lambda m: errors.append("console:" + m.text)
             if m.type == "error" else None)
     page.on("request", lambda r: escaped.append(r.url)
-            if not (r.url.startswith(origin) or r.url.startswith(FAKE_ORIGIN)) else None)
+            if not (r.url.startswith(origin) or r.url.startswith(FAKE_ORIGIN)
+                    or (allow_origin and r.url.startswith(allow_origin))) else None)
     page.route("**/supabase-config.js", lambda route: route.fulfill(
         status=200, content_type="application/javascript", body=config))
     if packs is not None:
@@ -274,42 +320,48 @@ def run_failure_keeps_picker(ctx):
     """A failed switch preserves settings and leaves the dialog usable."""
     import time as _t
 
-    def hang(route):
-        if "user_settings" in route.request.url:
-            return                                  # readiness never settles
-        return route.fulfill(status=200, content_type="application/json", body="[]")
-
-    page = build_page(ctx, packs=multi(), stored="__unset__", config=CLOUD,
-                      routes=hang)
-    page.add_init_script(
-        "try{localStorage.setItem('hsk_current_user',JSON.stringify({id:'u1',username:'u1'}));"
-        "localStorage.setItem('hsk_session',JSON.stringify({access_token:'t',"
-        "refresh_token:'r',expires_at:%d}));}catch(e){}" % int((_t.time() + 3600) * 1000))
-    page.goto(BASE, wait_until="load")
-    page.wait_for_timeout(500)
-    key = page.evaluate("() => window.HSKUtil.packBootShim.getSettingsKey()")
-    before = page.evaluate("(k) => localStorage.getItem(k)", key)
-    page.click('#courseList [data-pack="%s"]' % COMPAT_ID)
-    page.wait_for_timeout(7000)                     # 5s readiness cap + margin
-    st = page.evaluate("""(k) => ({
-        gateHidden: document.getElementById('courseGate').hidden,
-        errorHidden: document.getElementById('courseError').hidden,
-        errorText: document.getElementById('courseError').textContent,
-        disabled: Array.prototype.every.call(
-            document.querySelectorAll('#courseList .course-option'), b => b.disabled),
-        settings: localStorage.getItem(k)
-    })""", key)
-    check("failure: dialog stays open", st["gateHidden"] is False)
-    check("failure: an inline error is shown", st["errorHidden"] is False)
-    check("failure: the error names the cause",
-          "SYNC_NOT_READY" in (st["errorText"] or ""))
-    check("failure: settings untouched", st["settings"] == before)
-    check("failure: options are re-enabled for another try", st["disabled"] is False)
-    check("failure: no request escaped", page._escaped == [])
-    observed.append("failure: gateOpen=%s error=%r settingsUnchanged=%s"
-                    % (not st["gateHidden"], (st["errorText"] or "")[:48],
-                       st["settings"] == before))
-    page.close()
+    port, srv, held = start_blackhole()
+    hang_origin = "http://127.0.0.1:%d" % port
+    cloud_hang = ('window.SUPABASE_CONFIG = { url: "%s", anonKey: "fake" };'
+                  % hang_origin)
+    try:
+        page = build_page(ctx, packs=multi(), stored="__unset__",
+                          config=cloud_hang, allow_origin=hang_origin)
+        page.add_init_script(
+            "try{localStorage.setItem('hsk_current_user',JSON.stringify({id:'u1',username:'u1'}));"
+            "localStorage.setItem('hsk_session',JSON.stringify({access_token:'t',"
+            "refresh_token:'r',expires_at:%d}));}catch(e){}" % int((_t.time() + 3600) * 1000))
+        page.goto(BASE, wait_until="load")
+        page.wait_for_timeout(500)
+        key = page.evaluate("() => window.HSKUtil.packBootShim.getSettingsKey()")
+        before = page.evaluate("(k) => localStorage.getItem(k)", key)
+        page.click('#courseList [data-pack="%s"]' % COMPAT_ID)
+        page.wait_for_timeout(7000)                 # 5s readiness cap + margin
+        st = page.evaluate("""(k) => ({
+            gateHidden: document.getElementById('courseGate').hidden,
+            errorHidden: document.getElementById('courseError').hidden,
+            errorText: document.getElementById('courseError').textContent,
+            disabled: Array.prototype.every.call(
+                document.querySelectorAll('#courseList .course-option'), b => b.disabled),
+            settings: localStorage.getItem(k)
+        })""", key)
+        check("failure: dialog stays open", st["gateHidden"] is False)
+        check("failure: an inline error is shown", st["errorHidden"] is False)
+        check("failure: the error names the cause",
+              "SYNC_NOT_READY" in (st["errorText"] or ""))
+        check("failure: settings untouched", st["settings"] == before)
+        check("failure: options are re-enabled for another try", st["disabled"] is False)
+        check("failure: no request escaped", page._escaped == [])
+        observed.append("failure: gateOpen=%s error=%r settingsUnchanged=%s"
+                        % (not st["gateHidden"], (st["errorText"] or "")[:48],
+                           st["settings"] == before))
+        page.close()
+    finally:
+        for c in held:
+            try: c.close()
+            except OSError: pass
+        try: srv.close()
+        except OSError: pass
 
 
 def run_visual(ctx):
@@ -354,10 +406,13 @@ def main():
             ctx.close()
         browser.close()
     for line in observed:
-        print("OBSERVED " + line)
-    print(json.dumps({"suite": "pack_course_picker", "pass": not fails,
-                      "failures": fails[:25],
-                      "skipped": ["webkit (browser binary not installed)"]}))
+        print("OBSERVED " + ascii_safe(line))
+    # json.dumps already escapes non-ASCII (ensure_ascii defaults to True); the
+    # wrapper makes that guarantee explicit rather than incidental.
+    print(ascii_safe(json.dumps(
+        {"suite": "pack_course_picker", "pass": not fails,
+         "failures": fails[:25],
+         "skipped": ["webkit (browser binary not installed)"]})))
     return 0 if not fails else 1
 
 
