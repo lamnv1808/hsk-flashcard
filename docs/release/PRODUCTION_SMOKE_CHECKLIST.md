@@ -4,6 +4,15 @@ Run after a Render deploy is **Live**, in a hard-refreshed or fresh/incognito br
 both a mobile viewport and desktop, in light and dark mode. Use **test fixtures only** for any
 logged-in checks — never real user data.
 
+## Entry choice (configured deployments)
+Production ships a populated `supabase-config.js`, so a logged-out visitor is asked once.
+Run the whole checklist through the **no-account** path — never a real account.
+- [ ] A fresh/incognito context shows the chooser with **all three** actions: Đăng nhập, Đăng ký,
+      **Học không cần tài khoản**.
+- [ ] Choosing **Học không cần tài khoản** closes the chooser, and the top bar then shows the
+      **Đăng nhập** control that reopens the same chooser.
+- [ ] After that choice: a plain reload **and** an offline reload stay usable with no chooser.
+
 ## Boot & home
 - [ ] Home loads with **no console errors**.
 - [ ] Daily Goal panel renders (near the top) with the correct `N/G` and progress bar.
@@ -26,7 +35,9 @@ logged-in checks — never real user data.
 ## Other modes & persistence
 - [ ] Run a **Test Mode** quiz (does not affect SRS/daily count/streak).
 - [ ] Reload → progress **persists**.
-- [ ] **Local-only** mode works (no account) — study + progress persist locally.
+- [ ] **Local-only** mode works (no account) — study + progress persist locally. Storage must be
+      the base keys (`hsk_flashcard_progress_v2` / `_settings_v2`), with **no** `hsk_session`,
+      **no** `hsk_current_user`, **no** `hsk_sync_*` key and **no** Supabase request at all.
 - [ ] Logged-in **account isolation** verified with test fixtures (account B never sees account A's data).
 - [ ] **Offline**: load once online, go offline → app shell + a Study session still work.
 

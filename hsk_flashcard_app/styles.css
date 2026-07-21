@@ -159,6 +159,14 @@ body.auth-locked{overflow:hidden}
 .auth-msg.err{color:#dc2626}.auth-msg.ok{color:#16a34a}
 .auth-hint{margin:14px 0 0;font-size:12px;color:var(--muted);line-height:1.5}
 
+/* Explicit "study without an account" action inside the chooser + the top-bar
+   control that reopens the chooser while in no-account mode. */
+.auth-or{display:flex;align-items:center;gap:10px;margin:16px 0 12px;color:var(--muted);font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em}
+.auth-or::before,.auth-or::after{content:"";flex:1;height:1px;background:var(--line)}
+.auth-local-btn{width:100%;min-height:48px}
+.account-cta-btn{border:1px solid var(--line);background:var(--panel);color:var(--text);height:44px;padding:0 14px;border-radius:14px;font-weight:800;cursor:pointer;display:inline-flex;align-items:center}
+.account-cta-btn:hover{border-color:var(--accent);color:var(--accent)}
+
 /* Profile button + dropdown */
 .profile-btn{font-weight:900;font-size:16px;background:var(--accent);color:#fff;border-color:var(--accent);text-transform:uppercase}
 .profile-menu{position:fixed;z-index:1001;min-width:230px;background:var(--panel);color:var(--text);border:1px solid var(--line);
@@ -180,6 +188,7 @@ body.auth-locked{overflow:hidden}
 @media(max-width:720px){
   .auth-card{border-radius:20px;padding:22px 18px}
   .profile-menu{min-width:210px}
+  .account-cta-btn{padding:0 11px;font-size:14px}
 }
 
 /* ---------- Phase 24A: PIN modal (reuses .auth-gate/.auth-card/.auth-input/.auth-label/.auth-msg) ---------- */

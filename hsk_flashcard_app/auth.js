@@ -4,6 +4,12 @@
  *    (no external CDN, so the PWA stays offline-friendly).
  *  - When SUPABASE_CONFIG is empty this file is a NO-OP and the
  *    app behaves exactly as before (local-only, zero regression).
+ *  - When it IS configured, a logged-out visitor is offered three
+ *    explicit choices: Đăng nhập / Đăng ký / "Học không cần tài
+ *    khoản". The third records `hsk_auth_mode_v1="local"` and is a
+ *    real local-only session in the original sense: base storage
+ *    keys, no account, no session, no sync, no network call. A
+ *    context that has made no choice is still always asked.
  * ============================================================ */
 (function () {
   "use strict";
@@ -15,10 +21,23 @@
   var USER_KEY    = "hsk_current_user";   // {id, username}  (NOT sensitive; used for namespacing)
   var PROG_BASE   = "hsk_flashcard_progress_v2";
   var SET_BASE    = "hsk_flashcard_settings_v2";
+  /* Explicit "study without an account" choice on a CONFIGURED deployment.
+     Only ever holds the literal "local"; it is NOT a session, NOT an identity and
+     carries no token/PIN/secret. Its single job is to remember that the learner
+     already answered the Login/Register/no-account question, so a configured
+     deployment does not re-block them on every (including offline) reload.
+     Absent  -> the chooser is shown (a brand-new context is always asked).
+     "local" -> no account: base storage keys, no session, no sync, no request. */
+  var AUTH_MODE_KEY = "hsk_auth_mode_v1";
+  var AUTH_MODE_LOCAL = "local";
 
   function readJSON(k) { try { return JSON.parse(localStorage.getItem(k) || "null"); } catch (_) { return null; } }
   function nsProgress(id) { return PROG_BASE + "::" + id; }
   function nsSettings(id) { return SET_BASE + "::" + id; }
+  function readAuthMode() { try { return localStorage.getItem(AUTH_MODE_KEY); } catch (_) { return null; } }
+  function chose(mode) { return readAuthMode() === mode; }
+  function setAuthMode(mode) { try { localStorage.setItem(AUTH_MODE_KEY, mode); } catch (_) {} }
+  function clearAuthMode() { try { localStorage.removeItem(AUTH_MODE_KEY); } catch (_) {} }
 
   /* ---- SYNCHRONOUS boot: choose the storage namespace before app.js reads it ---- */
   var bootUser = CONFIGURED ? readJSON(USER_KEY) : null;
@@ -26,10 +45,19 @@
     window.HSK_AUTH = { configured: false };
     return; // local-only mode. Nothing else happens.
   }
+  /* A stored account always wins over the no-account preference (the preference is
+     cleared on every successful login/register, so the two cannot legitimately
+     coexist; if they ever did, the account is the safer, data-preserving branch).
+     The no-account shape carries NO userId/progressKey/settingsKey, so
+     AuthContextQuery resolves the SAME base keys the gated shape already resolves,
+     and sync.js's `A.configured && A.userId` gate stays false. `localOnly` is an
+     additive marker field; AuthContextQuery ignores unknown fields. */
   window.HSK_AUTH = (bootUser && bootUser.id)
     ? { configured: true, userId: bootUser.id, username: bootUser.username,
         progressKey: nsProgress(bootUser.id), settingsKey: nsSettings(bootUser.id) }
-    : { configured: true, needsAuth: true };
+    : (chose(AUTH_MODE_LOCAL)
+        ? { configured: true, localOnly: true }
+        : { configured: true, needsAuth: true });
 
   /* ---------------------- low-level HTTP ---------------------- */
   function base() { return CFG.url.replace(/\/+$/, ""); }
@@ -93,11 +121,13 @@
     // it normalizes to lowercase itself for uniqueness/login.
     var out = await callFn("register", { username: String(username).trim(), pin: String(pin) });
     setSession(out.session); setUser(out.user);
+    clearAuthMode();   // opting into an account supersedes any earlier no-account choice
     return out.user;
   }
   async function login(username, pin) {
     var out = await callFn("login", { username: String(username).trim(), pin: String(pin) });
     setSession(out.session); setUser(out.user);
+    clearAuthMode();   // opting into an account supersedes any earlier no-account choice
     return out.user;
   }
   async function changePin(oldPin, newPin) {
@@ -120,7 +150,9 @@
     base: base, headers: headers,
     accessToken: accessToken,
     currentUser: function () { return readJSON(USER_KEY); },
-    isLoggedIn: function () { return !!getSession() && !!readJSON(USER_KEY); }
+    isLoggedIn: function () { return !!getSession() && !!readJSON(USER_KEY); },
+    // Read-only view of the explicit no-account choice. Never a user, never a session.
+    isLocalOnly: function () { return !readJSON(USER_KEY) && chose(AUTH_MODE_LOCAL); }
   };
 
   /* ============================================================
@@ -160,6 +192,9 @@
           '<button id="auSubmit" type="submit" class="primary-btn auth-submit">Đăng nhập</button>' +
         '</form>' +
         '<p class="auth-hint">Chỉ cần tên đăng nhập và mã PIN 4 số. Tiến độ học của bạn được lưu và đồng bộ trên mọi thiết bị.</p>' +
+        '<div class="auth-or"><span>hoặc</span></div>' +
+        '<button id="auLocalOnly" type="button" class="secondary-btn auth-local-btn">Học không cần tài khoản</button>' +
+        '<p class="auth-hint">Tiến độ chỉ được lưu trên thiết bị này và không đồng bộ. Bạn có thể đăng nhập bất cứ lúc nào sau đó.</p>' +
       '</div>';
     return wrap;
   }
@@ -197,12 +232,48 @@
       document.getElementById("auPin2").type = t;
     });
     document.getElementById("authForm").addEventListener("submit", onSubmit);
+    document.getElementById("auLocalOnly").addEventListener("click", chooseLocalOnly);
     document.getElementById("auUser").focus();
   }
   function hideGate() {
     var g = document.getElementById("authGate");
     if (g) g.remove();
     document.body.classList.remove("auth-locked");
+  }
+
+  /* ---- explicit "study without an account" ----------------------------------
+     The supported, deliberate exit from the chooser on a configured deployment.
+     It records the learner's choice and nothing else: no Supabase/auth/REST call
+     is made, no `hsk_session` or `hsk_current_user` is written, HSKSync is never
+     started, and no existing progress/settings byte is read or rewritten.
+
+     No location.reload() is needed here (unlike login, which changes the storage
+     namespace): the gated shape and the no-account shape both resolve the SAME
+     base progress/settings keys, so the keys app.js captured at load are already
+     the correct ones. Narrowing HSK_AUTH in place therefore cannot shift the
+     namespace under a running app, which is exactly what the "immutable per page"
+     rule protects. It also keeps the choice usable while offline. */
+  function chooseLocalOnly() {
+    setAuthMode(AUTH_MODE_LOCAL);
+    window.HSK_AUTH = { configured: true, localOnly: true };
+    hideGate();
+    buildAccountCta();
+    var cta = document.getElementById("accountCtaBtn");
+    if (cta && typeof cta.focus === "function") cta.focus();   // keep keyboard focus in the document
+  }
+
+  /* ---- top-bar account control shown while in no-account mode ----
+     Reopens the SAME Login/Register chooser (with its no-account action intact,
+     so the learner is never trapped by having reopened it). */
+  function buildAccountCta() {
+    if (document.getElementById("accountCtaBtn")) return;
+    var host = document.querySelector(".topbar-actions") || document.querySelector(".topbar");
+    if (!host) return;
+    var btn = el("button", { id: "accountCtaBtn", class: "account-cta-btn", type: "button",
+                             "aria-label": "Đăng nhập hoặc tạo tài khoản" });
+    btn.textContent = "Đăng nhập";
+    btn.onclick = function () { showGate(); };
+    host.insertBefore(btn, host.firstChild);
   }
   function digitsOnly(e) { e.target.value = e.target.value.replace(/\D/g, "").slice(0, 4); }
 
@@ -455,8 +526,12 @@
       // Logged in: show profile, kick off background sync (sync.js self-activates).
       buildProfile(window.HSK_AUTH.username);
       if (window.HSKSync) window.HSKSync.start();
+    } else if (window.HSK_AUTH && window.HSK_AUTH.localOnly) {
+      // The learner already chose "no account": honour it on every reload,
+      // including offline ones, and keep an account route one click away.
+      buildAccountCta();
     } else {
-      // Configured but not logged in -> block the app with the gate.
+      // Configured, logged out and no choice recorded yet -> ask, via the gate.
       showGate();
     }
   }

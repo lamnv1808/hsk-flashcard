@@ -115,12 +115,151 @@ with sync_playwright() as p:
     pg3.wait_for_timeout(1200)
     out["migrated_store"] = pg3.evaluate("() => Object.keys(JSON.parse(localStorage.getItem('hsk_flashcard_progress_v2::u-migrator')||'{}')).length")
     out["legacy_preserved"] = pg3.evaluate("() => !!localStorage.getItem('hsk_flashcard_progress_v2')")
-    out["pageerrors"] = errs
     ctx3.close()
+
+    # ================= Web RC hotfix: explicit local-only access =================
+    # A CONFIGURED deployment must offer Login / Register / "no account" instead of
+    # trapping every anonymous visitor behind a non-dismissible gate. These scenarios
+    # prove the no-account path is real (base keys, no session, no sync, no request),
+    # durable across reloads, reversible into an account, and never automatic.
+
+    # ---------- Scenario D: the chooser offers all three actions ----------
+    ctx4 = b.new_context(viewport={"width": 1280, "height": 900}); setup_routes(ctx4)
+    pg4 = ctx4.new_page(); pg4.on("pageerror", lambda e: errs.append("D:" + str(e)))
+    seen4 = []                      # every request this context makes
+    ctx4.on("request", lambda r: seen4.append(r.url))
+    pg4.goto(URL); pg4.wait_for_timeout(500)
+    out["D_gate_shown"] = pg4.is_visible("#authGate")
+    out["D_actions_visible"] = (pg4.is_visible('.auth-tab[data-tab="login"]')
+                                and pg4.is_visible('.auth-tab[data-tab="register"]')
+                                and pg4.is_visible("#auSubmit")
+                                and pg4.is_visible("#auLocalOnly"))
+    out["D_local_label"] = (pg4.text_content("#auLocalOnly") or "").strip()
+    # keyboard reachable: a real focusable <button> inside the dialog
+    out["D_local_keyboard"] = pg4.evaluate("""() => {
+      const b = document.getElementById('auLocalOnly');
+      if (!b || b.tagName !== 'BUTTON' || b.disabled) return false;
+      b.focus();
+      return document.activeElement === b && b.tabIndex >= 0;
+    }""")
+    # a byte of pre-existing local progress must survive the choice untouched
+    pg4.evaluate("() => localStorage.setItem('hsk_flashcard_progress_v2', JSON.stringify({'7':{due:'2025-05-05',interval:5,reps:2,correct:2,attempts:3}}))")
+    before_bytes = pg4.evaluate("() => localStorage.getItem('hsk_flashcard_progress_v2')")
+
+    # ---------- Scenario E: choosing "no account" ----------
+    pg4.click("#auLocalOnly"); pg4.wait_for_timeout(400)
+    out["E_gate_gone"] = not pg4.is_visible("#authGate")
+    out["E_body_unlocked"] = pg4.evaluate("() => !document.body.classList.contains('auth-locked')")
+    out["E_auth_state"] = pg4.evaluate("""() => {
+      const a = window.HSK_AUTH || {};
+      return { configured: !!a.configured, localOnly: !!a.localOnly,
+               hasUserId: 'userId' in a, hasUsername: 'username' in a,
+               hasProgressKey: 'progressKey' in a, hasSettingsKey: 'settingsKey' in a };
+    }""")
+    out["E_keys"] = pg4.evaluate("""() => ({
+      progressKey: window.HSKUtil.authContext.getProgressKey(),
+      settingsKey: window.HSKUtil.authContext.getSettingsKey(),
+      canSync: window.HSKUtil.authContext.canSync(),
+      authenticated: window.HSKUtil.authContext.isAuthenticated() })""")
+    out["E_storage"] = pg4.evaluate("""() => ({
+      mode: localStorage.getItem('hsk_auth_mode_v1'),
+      session: localStorage.getItem('hsk_session'),
+      user: localStorage.getItem('hsk_current_user'),
+      syncKeys: Object.keys(localStorage).filter(k => k.indexOf('hsk_sync') === 0) })""")
+    out["E_progress_preserved"] = (pg4.evaluate("() => localStorage.getItem('hsk_flashcard_progress_v2')") == before_bytes)
+    out["E_account_cta"] = pg4.is_visible("#accountCtaBtn")
+    out["E_no_backend_request"] = [u for u in seen4 if MOCK in u]
+
+    # ---------- Scenario E2: local-only Study, persistence, no answer leak ----------
+    out["E2_cards"] = pg4.evaluate("() => (window.HSK_CARDS || []).length")
+    pg4.evaluate("() => { progress={}; save(); startStudy(['HSK1']); flipCard(); }")
+    graded_id = pg4.evaluate("() => session[0].id")
+    pg4.evaluate("() => gradeCard('good')")
+    pg4.wait_for_timeout(400)
+    out["E2_no_leak_after_grade"] = pg4.evaluate(
+        "() => !document.getElementById('flashcard').classList.contains('flipped')")
+    before_progress = pg4.evaluate("() => localStorage.getItem('hsk_flashcard_progress_v2')")
+    out["E2_graded_one"] = pg4.evaluate("() => Object.keys(JSON.parse(localStorage.getItem('hsk_flashcard_progress_v2')||'{}')).length")
+    pg4.reload(); pg4.wait_for_timeout(600)
+    out["E2_gate_after_reload"] = pg4.is_visible("#authGate")          # must stay False
+    out["E2_cta_after_reload"] = pg4.is_visible("#accountCtaBtn")
+    out["E2_progress_exact"] = (pg4.evaluate("() => localStorage.getItem('hsk_flashcard_progress_v2')") == before_progress)
+    out["E2_card_state_kept"] = pg4.evaluate(
+        "(id) => { const p = window.HSK_APP.getProgress()[String(id)]; return !!(p && p.reps >= 1); }", graded_id)
+    out["E2_still_local"] = pg4.evaluate(
+        "() => !!(window.HSK_AUTH.localOnly) && !window.HSK_AUTH.userId && !localStorage.getItem('hsk_session')")
+    out["E2_no_backend_request"] = [u for u in seen4 if MOCK in u]
+    # no answer leak on the first card of a fresh post-reload session either
+    pg4.evaluate("() => startStudy(['HSK1'])")
+    pg4.wait_for_timeout(300)
+    out["E2_no_leak_after_reload"] = pg4.evaluate(
+        "() => !document.getElementById('flashcard').classList.contains('flipped')")
+
+    # ---------- Scenario F: opting into an account from local-only ----------
+    pg4.click("#accountCtaBtn"); pg4.wait_for_timeout(400)
+    out["F_gate_reopened"] = pg4.is_visible("#authGate")
+    out["F_local_action_still_there"] = pg4.is_visible("#auLocalOnly")   # never trapped
+    pg4.fill("#auUser", "opted"); pg4.fill("#auPin", "2468"); pg4.click("#auSubmit")
+    pg4.wait_for_selector("#profileBtn", timeout=8000)
+    out["F_after_login"] = pg4.evaluate("""() => ({
+      userId: window.HSK_AUTH.userId,
+      mode: localStorage.getItem('hsk_auth_mode_v1'),
+      localOnly: !!window.HSK_AUTH.localOnly,
+      progressKey: window.HSKUtil.authContext.getProgressKey(),
+      cta: !!document.getElementById('accountCtaBtn') })""")
+    pg4.evaluate("() => { startStudy(['HSK2']); flipCard(); gradeCard('easy'); }")
+    pg4.wait_for_timeout(400)
+    out["F_isolation"] = pg4.evaluate("""() => {
+      const base = localStorage.getItem('hsk_flashcard_progress_v2');
+      const acct = localStorage.getItem('hsk_flashcard_progress_v2::u-opted');
+      return !!base && !!acct && base !== acct;
+    }""")
+    ctx4.close()
+
+    # ---------- Scenario G: a fresh context is still always asked ----------
+    ctx5 = b.new_context(); setup_routes(ctx5)
+    pg5 = ctx5.new_page(); pg5.on("pageerror", lambda e: errs.append("G:" + str(e)))
+    pg5.goto(URL); pg5.wait_for_timeout(500)
+    out["G_fresh_context_gate"] = pg5.is_visible("#authGate")
+    out["G_no_mode_key"] = pg5.evaluate("() => localStorage.getItem('hsk_auth_mode_v1')")
+    out["G_needs_auth"] = pg5.evaluate("() => !!(window.HSK_AUTH && window.HSK_AUTH.needsAuth)")
+    ctx5.close()
+
+    out["pageerrors"] = errs
     b.close()
 
 out["pass"]=bool(out.get("pageerrors")==[] and out.get("gate_shown") and out.get("gate_gone")
                  and out.get("isolation") and out.get("logout_gate") and out.get("migrate_prompt")
-                 and out.get("legacy_preserved") and out.get("push_only_modified") and out.get("migrated_store")==2)
+                 and out.get("legacy_preserved") and out.get("push_only_modified") and out.get("migrated_store")==2
+                 # --- Web RC hotfix: explicit local-only access ---
+                 and out.get("D_gate_shown") and out.get("D_actions_visible")
+                 and out.get("D_local_keyboard") and out.get("D_local_label")
+                 and out.get("E_gate_gone") and out.get("E_body_unlocked")
+                 and out.get("E_auth_state") == {"configured": True, "localOnly": True,
+                                                 "hasUserId": False, "hasUsername": False,
+                                                 "hasProgressKey": False, "hasSettingsKey": False}
+                 and out.get("E_keys") == {"progressKey": "hsk_flashcard_progress_v2",
+                                           "settingsKey": "hsk_flashcard_settings_v2",
+                                           "canSync": False, "authenticated": False}
+                 and out.get("E_storage", {}).get("mode") == "local"
+                 and out.get("E_storage", {}).get("session") is None
+                 and out.get("E_storage", {}).get("user") is None
+                 and out.get("E_storage", {}).get("syncKeys") == []
+                 and out.get("E_progress_preserved") and out.get("E_account_cta")
+                 and out.get("E_no_backend_request") == []
+                 and out.get("E2_cards") == 5002 and out.get("E2_graded_one") == 1
+                 and out.get("E2_no_leak_after_grade") and out.get("E2_no_leak_after_reload")
+                 and out.get("E2_gate_after_reload") is False and out.get("E2_cta_after_reload")
+                 and out.get("E2_progress_exact") and out.get("E2_card_state_kept")
+                 and out.get("E2_still_local") and out.get("E2_no_backend_request") == []
+                 and out.get("F_gate_reopened") and out.get("F_local_action_still_there")
+                 and out.get("F_after_login", {}).get("userId") == "u-opted"
+                 and out.get("F_after_login", {}).get("mode") is None
+                 and out.get("F_after_login", {}).get("localOnly") is False
+                 and out.get("F_after_login", {}).get("progressKey") == "hsk_flashcard_progress_v2::u-opted"
+                 and out.get("F_after_login", {}).get("cta") is False
+                 and out.get("F_isolation")
+                 and out.get("G_fresh_context_gate") and out.get("G_needs_auth")
+                 and out.get("G_no_mode_key") is None)
 print(json.dumps(out, ensure_ascii=False))
 import sys as _sys; _sys.exit(0 if out.get("pass") else 1)
