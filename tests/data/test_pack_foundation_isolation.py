@@ -29,7 +29,7 @@ FOUNDATION_JS = ("core/content/pack-registry.js", "core/content/pack-boot.js")
 SHIM_JS = "core/content/pack-boot-shim.js"
 
 DATA_JS_SHA256 = "d0b0a279228d86caf7dbe14c757502311ec90e22f3d8a7c14a978c056be42377"
-EXPECTED_CACHE = "hsk-flashcards-v40"
+EXPECTED_CACHE = "hsk-flashcards-v41"
 EXPECTED_ASSET_COUNT = 40
 
 # Fixture identifiers that must never reach the shipped app.

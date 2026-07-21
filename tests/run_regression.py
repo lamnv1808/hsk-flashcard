@@ -123,6 +123,7 @@ GROUPS = {
         "tests/browser/test_pack_switch.py",
         "tests/browser/test_pack_reset_scope.py",
         "tests/browser/test_pack_runtime_correctness.py",
+        "tests/browser/test_pack_course_picker.py",
     ],
 }
 

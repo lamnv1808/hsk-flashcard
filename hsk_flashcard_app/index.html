@@ -31,6 +31,12 @@
 
     <main>
       <section id="homeView" class="view active">
+        <!-- Course switcher: hidden unless the catalog offers 2+ launch-visible
+             courses, so the single-course experience is visually unchanged. -->
+        <div id="courseSwitchRow" class="course-switch-row" hidden>
+          <span class="course-current">Khóa học: <strong id="courseCurrentName"></strong></span>
+          <button type="button" id="courseSwitchBtn" class="secondary-btn">Đổi khóa học</button>
+        </div>
         <div class="hero">
           <div>
             <p class="hero-kicker">Học theo nhịp nhớ của bạn</p>
@@ -418,6 +424,19 @@
        supabase-config.js is hoisted here (trivial, dependency-free) so the shim
        can resolve the account-namespaced activePackId before auth.js exists.
        See docs/architecture/PHASE_24E_B_RUNTIME_INTEGRATION.md -->
+    <div id="courseGate" class="course-gate" hidden>
+    <div class="course-card" role="dialog" aria-modal="true"
+         aria-labelledby="courseGateTitle" aria-describedby="courseGateHint">
+      <h2 id="courseGateTitle">Chọn khóa học</h2>
+      <p class="muted" id="courseGateHint">Chọn khóa bạn muốn học. Bạn có thể đổi lại sau.</p>
+      <div id="courseList" class="course-list"></div>
+      <p id="courseError" class="course-error" role="alert" hidden></p>
+      <div class="course-actions">
+        <button type="button" id="courseCancelBtn" class="secondary-btn" hidden>Đóng</button>
+      </div>
+    </div>
+  </div>
+
   <script src="supabase-config.js"></script>
   <script src="packs/catalog.js"></script>
   <script src="core/content/pack-registry.js"></script>

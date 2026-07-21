@@ -719,3 +719,133 @@ window.HSK_APP = {
     if(!$("studyView").classList.contains("active")) renderHome();
   }
 };
+
+/* ================= Course picker (Phase 24F) =================
+   Renders ONLY validated launch-visible packs from packBootShim's retained
+   registry. With a single course nothing is rendered and nothing is written,
+   so the existing experience is untouched. Every selection goes through
+   packBootShim.switchPack(); this file never writes activePackId or
+   localStorage itself. */
+(function(){
+  const SHIM = window.HSKUtil && window.HSKUtil.packBootShim;
+  if(!SHIM || typeof SHIM.getLaunchVisiblePacks !== "function") return;
+
+  const gate = $("courseGate"), list = $("courseList"), errBox = $("courseError");
+  const row = $("courseSwitchRow"), nameEl = $("courseCurrentName");
+  const cancelBtn = $("courseCancelBtn"), switchBtn = $("courseSwitchBtn");
+  if(!gate || !list || !row) return;
+
+  const packs = SHIM.getLaunchVisiblePacks();
+  // One course (production today): no dialog, no selector, no writes at all.
+  if(packs.length < 2) return;
+
+  const activeId = SHIM.getActivePackId();
+  const titleOf = p => p.shortTitle || p.title || p.packId;
+  let switching = false, mandatory = false, lastFocus = null;
+
+  function setError(msg){
+    if(!errBox) return;
+    errBox.textContent = msg || "";
+    errBox.hidden = !msg;
+  }
+  function setBusy(on){
+    switching = on;
+    list.querySelectorAll("button").forEach(b => { b.disabled = on; });
+    if(cancelBtn) cancelBtn.disabled = on;
+  }
+  // A switch reloads the page, so it must never interrupt a live session.
+  function sessionActive(){
+    return document.body.classList.contains("studying")
+        || document.body.classList.contains("testing");
+  }
+
+  function choose(packId){
+    if(switching) return;                       // no duplicate calls
+    setError("");
+    setBusy(true);
+    // persistSame records an EXPLICIT first-run choice of the effective
+    // default; switchPack still decides whether that is a write or a no-op.
+    Promise.resolve(SHIM.switchPack(packId, { persistSame: true }))
+      .then(res => {
+        if(res && res.ok){
+          if(res.changed === false && !mandatory) closeGate();
+          return;                               // a real switch reloads
+        }
+        setBusy(false);
+        setError("Không thể đổi khóa học (" + ((res && res.code) || "UNKNOWN") + "). Vui lòng thử lại.");
+      })
+      .catch(e => {
+        setBusy(false);
+        setError("Không thể đổi khóa học: " + ((e && e.message) || e));
+      });
+  }
+
+  function render(){
+    list.innerHTML = "";
+    packs.forEach(p => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "course-option";
+      b.setAttribute("data-pack", p.packId);
+      if(p.packId === activeId) b.setAttribute("aria-current", "true");
+      const t = document.createElement("span");
+      t.className = "co-title";
+      t.textContent = titleOf(p) + (p.packId === activeId ? " · đang học" : "");
+      b.appendChild(t);
+      if(p.description){
+        const d = document.createElement("span");
+        d.className = "co-desc"; d.textContent = p.description;
+        b.appendChild(d);
+      }
+      b.onclick = () => choose(p.packId);
+      list.appendChild(b);
+    });
+  }
+
+  function openGate(isMandatory){
+    mandatory = !!isMandatory;
+    lastFocus = document.activeElement;
+    setError("");
+    render();
+    if(cancelBtn) cancelBtn.hidden = mandatory;   // mandatory cannot be dismissed
+    gate.hidden = false;
+    const first = list.querySelector("button");
+    if(first) first.focus();
+  }
+  function closeGate(){
+    if(mandatory) return;                         // never closes on failure
+    gate.hidden = true;
+    setBusy(false);
+    if(lastFocus && lastFocus.focus) lastFocus.focus();
+  }
+
+  // Focus trap + Escape, per dialog semantics.
+  gate.addEventListener("keydown", e => {
+    if(e.key === "Escape" && !mandatory){ e.preventDefault(); closeGate(); return; }
+    if(e.key !== "Tab") return;
+    const f = Array.from(gate.querySelectorAll("button:not([disabled]):not([hidden])"));
+    if(!f.length) return;
+    const first = f[0], last = f[f.length - 1];
+    if(e.shiftKey && document.activeElement === first){ e.preventDefault(); last.focus(); }
+    else if(!e.shiftKey && document.activeElement === last){ e.preventDefault(); first.focus(); }
+  });
+  if(cancelBtn) cancelBtn.onclick = closeGate;
+
+  // Home switcher for returning users with a valid stored course.
+  row.hidden = false;
+  if(nameEl){
+    const cur = packs.filter(p => p.packId === activeId)[0];
+    nameEl.textContent = cur ? titleOf(cur) : (activeId || "");
+  }
+  if(switchBtn) switchBtn.onclick = () => {
+    if(sessionActive()){
+      alert("Hãy kết thúc phiên học trước khi đổi khóa học.");
+      return;
+    }
+    openGate(false);
+  };
+
+  // A boot that did NOT honour a valid stored id (absent, malformed, unknown,
+  // hidden, incompatible) must ask the user rather than silently repairing it.
+  if(SHIM.getBootReason() !== "requested") openGate(true);
+})();

@@ -260,7 +260,7 @@
     return { ok: false, code: code, message: message, packId: packId };
   }
 
-  function switchPack(targetPackId) {
+  function switchPack(targetPackId, options) {
     // Guard is set before the first await, so a second call cannot interleave.
     if (switching) {
       if (switching.target === targetPackId) return switching.promise;
@@ -295,15 +295,27 @@
         "target rejected: " + candidate.reason, targetPackId));
     }
 
-    // Same EFFECTIVE pack: a complete no-op. A malformed stored value is
-    // deliberately NOT repaired here -- repairing it would be a settings write
-    // the user never asked for, which is exactly what the no-write contract
-    // forbids.
+    // Same EFFECTIVE pack. By default a complete no-op: a malformed stored
+    // value is deliberately NOT repaired, because repairing it would be a
+    // settings write the user never asked for -- exactly what the no-write
+    // contract forbids.
+    //
+    // persistSame is the ONE sanctioned exception, and only for an EXPLICIT
+    // user choice: on first run with several courses, picking the one that
+    // happens to already be the effective default must still be recorded, or
+    // the mandatory picker would reappear forever. It is still not repair --
+    // nothing writes unless the user actively chose this course -- and when the
+    // stored id already matches, it stays a zero-write no-op.
+    var persistSame = !!(options && options.persistSame);
     var current = state.plan ? state.plan.packId : null;
     if (targetPackId === current) {
-      return Promise.resolve({
-        ok: true, changed: false, packId: targetPackId, reason: "same-pack"
-      });
+      if (!persistSame || readActivePackId() === targetPackId) {
+        return Promise.resolve({
+          ok: true, changed: false, packId: targetPackId, reason: "same-pack"
+        });
+      }
+      // else: fall through to the normal readiness -> save -> flush -> reload
+      // path, so there is still exactly one activePackId writer.
     }
 
     var entry = { target: targetPackId, promise: null };
@@ -431,8 +443,29 @@
     return entry.promise;
   }
 
+  /*
+   * The launch-visible courses, straight from the retained validated registry.
+   * The UI never reparses or reconstructs the catalog, so a course can only be
+   * offered if the registry already validated and cleared it: hidden, draft and
+   * version-incompatible packs are filtered out before this returns.
+   */
+  function getLaunchVisiblePacks() {
+    var reg = state.registry;
+    if (!reg) return [];
+    return reg.getLaunchVisiblePacks(reg.getAppVersion()).map(function (p) {
+      return {
+        packId: p.packId,
+        title: p.title,
+        shortTitle: p.shortTitle,
+        description: p.description,
+        courseType: p.courseType
+      };
+    });
+  }
+
   NS.packBootShim = {
     writeCards: writeCards,
+    getLaunchVisiblePacks: getLaunchVisiblePacks,
     writeManifest: writeManifest,
     switchPack: switchPack,
     // Introspection for tests and for the Phase 24F pack switcher.
