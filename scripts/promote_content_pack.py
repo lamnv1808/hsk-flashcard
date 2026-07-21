@@ -161,11 +161,16 @@ def check_target_foreign(target, expected_names):
 # atomic publish
 # --------------------------------------------------------------------------
 
-def publish(target, payload, journal_dir, pack_id):
+def publish(target, payload, journal_dir, pack_id, finalize=True):
     """Stage completely, then swap the directory. Same protocol as Phase 24D.
 
     Two atomic renames rather than one, because os.replace(dir -> existing dir)
     raises on Windows. A journal makes the window between them recoverable.
+
+    finalize=False DEFERS dropping the saved old directory and the journal, so
+    the caller can still restore the prior pack if a LATER step (catalog
+    regeneration/write) fails. The caller then calls finalize_publish() on
+    success or rollback_published() on failure.
     """
     staging = os.path.join(journal_dir, ".promote-staging-%s" % pack_id)
     old_dir = os.path.join(journal_dir, ".promote-old-%s" % pack_id)
@@ -179,6 +184,7 @@ def publish(target, payload, journal_dir, pack_id):
     inventory = [{"path": n, "bytes": len(d), "sha256": emit.sha256_of(d)}
                  for n, d in sorted(payload.items())]
 
+    had_prior = os.path.isdir(target)
     try:
         if os.path.isdir(staging):
             shutil.rmtree(staging)
@@ -205,11 +211,33 @@ def publish(target, payload, journal_dir, pack_id):
         if os.path.isdir(staging):
             shutil.rmtree(staging, ignore_errors=True)
 
+    if finalize:
+        finalize_publish(old_dir, journal)
+        return inventory
+    return inventory, old_dir, journal, had_prior
+
+
+def finalize_publish(old_dir, journal):
+    """Commit a deferred publish: drop the saved old directory and journal."""
     if os.path.isdir(old_dir):
         shutil.rmtree(old_dir, ignore_errors=True)
     if os.path.isfile(journal):
         os.remove(journal)
-    return inventory
+
+
+def rollback_published(target, old_dir, journal, had_prior):
+    """Undo a committed swap when a later step fails.
+
+    Restores the prior pack directory (or removes the freshly published one when
+    there was no prior), then clears the journal, leaving the runtime in exactly
+    its pre-promotion state.
+    """
+    if os.path.isdir(target):
+        shutil.rmtree(target, ignore_errors=True)
+    if had_prior and os.path.isdir(old_dir):
+        os.replace(old_dir, target)
+    if os.path.isfile(journal):
+        os.remove(journal)
 
 
 def rollback_target(target, old_dir):
@@ -222,16 +250,131 @@ def rollback_target(target, old_dir):
 # catalog regeneration
 # --------------------------------------------------------------------------
 
+def _canonical_runtime_bytes(abs_path):
+    """Bytes as the repository canonically stores a TEXT runtime asset (LF).
+
+    The legacy catalog records checksums over the LF-normalised form (see
+    tests/data/test_pack_catalog_legacy.py), because a CRLF checkout of a
+    committed-LF file must still verify. Runtime assets are always .js, so this
+    matches how those checksums were computed and is stable across platforms.
+    """
+    with open(abs_path, "rb") as fh:
+        return fh.read().replace(b"\r\n", b"\n")
+
+
+def _resolve_inside(app_real, rel_path, field):
+    """Resolve an app-root-relative path, rejecting traversal and symlink escape."""
+    if not isinstance(rel_path, str) or not rel_path:
+        raise PromotionError("%s must be a non-empty relative path" % field)
+    if rel_path.startswith("/") or (len(rel_path) > 1 and rel_path[1] == ":") \
+            or "\\" in rel_path or "://" in rel_path:
+        raise PromotionError("%s is not a plain relative path: %r" % (field, rel_path))
+    if ".." in rel_path.split("/"):
+        raise PromotionError("%s contains a '..' segment: %r" % (field, rel_path))
+    target = os.path.realpath(os.path.join(app_real, rel_path))
+    if not (target == app_real or target.startswith(app_real + os.sep)):
+        raise PromotionError("%s escapes the app root: %r" % (field, rel_path))
+    return target
+
+
+def _validate_legacy_entry(app_real, pack_id, packs_root, entry):
+    """Verify a legacy-installed descriptor against the bytes on disk.
+
+    A legacy pack (HSK) has no build handoff -- its payload is the hand-installed
+    data.js and its adapter lives under packs/<id>/. This never SYNTHESISES a
+    handoff or provenance; it only proves the existing descriptor still matches
+    exactly what is deployed, then preserves it structurally unchanged.
+    """
+    where = "legacy entry '%s'" % pack_id
+    if not isinstance(entry, dict):
+        raise PromotionError("%s must be an object" % where)
+    if entry.get("packId") != pack_id:
+        raise PromotionError(
+            "%s: packId %r does not match its directory" % (where, entry.get("packId")))
+    install = entry.get("install")
+    if not isinstance(install, dict) or install.get("kind") != "legacy-installed":
+        raise PromotionError("%s: install.kind must be 'legacy-installed'" % where)
+
+    manifest_rel = entry.get("manifestPath")
+    cards_rel = entry.get("cardsPath")
+    manifest_abs = _resolve_inside(app_real, manifest_rel, "%s.manifestPath" % where)
+    _resolve_inside(app_real, cards_rel, "%s.cardsPath" % where)
+
+    # The manifest must BELONG to this pack: it lives under packs/<pack_id>/.
+    pack_dir_real = os.path.realpath(os.path.join(packs_root, pack_id))
+    if not manifest_abs.startswith(pack_dir_real + os.sep):
+        raise PromotionError(
+            "%s.manifestPath does not live under packs/%s/" % (where, pack_id))
+
+    runtime = entry.get("runtimeAssets")
+    if not isinstance(runtime, dict) or "cards" not in runtime or "manifest" not in runtime:
+        raise PromotionError("%s: runtimeAssets.cards and .manifest are required" % where)
+
+    cards_sha = None
+    for role in ("cards", "manifest"):
+        asset = runtime[role]
+        if not isinstance(asset, dict):
+            raise PromotionError("%s.runtimeAssets.%s must be an object" % (where, role))
+        abs_path = _resolve_inside(app_real, asset.get("path"),
+                                   "%s.runtimeAssets.%s.path" % (where, role))
+        if not os.path.isfile(abs_path):
+            raise PromotionError(
+                "%s: runtime asset '%s' does not exist" % (where, asset.get("path")))
+        data = _canonical_runtime_bytes(abs_path)
+        recorded = asset.get("sha256")
+        actual = emit.sha256_of(data)          # already 'sha256:'-prefixed
+        if recorded != actual:
+            raise PromotionError(
+                "%s: runtime asset '%s' sha256 mismatch (recorded %r, actual %r)"
+                % (where, asset.get("path"), recorded, actual))
+        if asset.get("bytes") != len(data):
+            raise PromotionError(
+                "%s: runtime asset '%s' byte count mismatch (recorded %r, actual %d)"
+                % (where, asset.get("path"), asset.get("bytes"), len(data)))
+        if role == "cards":
+            cards_sha = actual
+
+    # contentChecksum is, by contract, the sha256 of the cards runtime asset.
+    if entry.get("contentChecksum") != cards_sha:
+        raise PromotionError(
+            "%s: contentChecksum %r disagrees with the cards runtime asset %r"
+            % (where, entry.get("contentChecksum"), cards_sha))
+    return entry
+
+
 def regenerate_catalog(app_root, build_root, catalog_path, default_pack,
                        app_version, allow_hidden):
     """Rebuild the catalog from every pack currently promoted into app_root.
 
     Deliberately driven by what is PROMOTED, not by what happens to be built:
     a catalog that advertises a pack the runtime does not have is exactly the
-    stale-state failure this tooling exists to prevent. Each promoted file is
-    re-verified against its handoff on the way through.
+    stale-state failure this tooling exists to prevent.
+
+    A generated pack is re-verified against its build handoff. A LEGACY-installed
+    pack (HSK) has no handoff by design; it is accepted only when the EXISTING
+    catalog already describes it as legacy-installed, and only after that
+    descriptor is re-verified against the deployed bytes. An unknown directory
+    with neither a handoff nor a valid legacy entry is still fatal.
     """
-    packs_root = os.path.join(os.path.realpath(app_root), PACKS_DIRNAME)
+    app_real = os.path.realpath(app_root)
+    packs_root = os.path.join(app_real, PACKS_DIRNAME)
+
+    # Read the existing catalog once (fail-closed if present but malformed). It
+    # is the only sanctioned source of a legacy descriptor and of the default/
+    # appVersion to preserve when the CLI does not override them.
+    existing = None
+    legacy_by_id = {}
+    if os.path.isfile(catalog_path):
+        existing = cat.read_catalog_js(catalog_path)
+        for e in existing["packs"]:
+            inst = e.get("install")
+            if isinstance(inst, dict) and inst.get("kind") == "legacy-installed":
+                pid = e.get("packId")
+                if pid in legacy_by_id:
+                    raise PromotionError(
+                        "existing catalog declares legacy pack '%s' more than once" % pid)
+                legacy_by_id[pid] = e
+
     entries = []
     if os.path.isdir(packs_root):
         for pack_id in sorted(os.listdir(packs_root)):
@@ -240,9 +383,16 @@ def regenerate_catalog(app_root, build_root, catalog_path, default_pack,
                 continue
             handoff_path = os.path.join(build_root, pack_id, cat.HANDOFF_NAME)
             if not os.path.isfile(handoff_path):
-                raise PromotionError(
-                    "pack '%s' is promoted but has no build handoff; the "
-                    "catalog cannot describe it honestly" % pack_id)
+                # No handoff: only a re-verified legacy descriptor is acceptable.
+                legacy = legacy_by_id.get(pack_id)
+                if legacy is None:
+                    raise PromotionError(
+                        "pack '%s' is promoted but has no build handoff and no "
+                        "'legacy-installed' entry in the existing catalog; the "
+                        "catalog cannot describe it honestly" % pack_id)
+                entries.append(_validate_legacy_entry(
+                    app_real, pack_id, packs_root, legacy))
+                continue
             handoff = cat.read_handoff(handoff_path)
             wanted, present, _ = cat.runtime_asset_names(handoff)
             for name in sorted(wanted.values()):
@@ -263,8 +413,15 @@ def regenerate_catalog(app_root, build_root, catalog_path, default_pack,
     if not entries:
         raise PromotionError("no promoted packs found; nothing to catalogue")
 
-    catalog = cat.assemble(entries, default_pack_id=default_pack,
-                           app_version=app_version)
+    # Explicit CLI values are authoritative; otherwise preserve what the existing
+    # catalog declared.
+    effective_default = default_pack if default_pack is not None \
+        else (existing or {}).get("defaultPackId")
+    effective_appver = app_version if app_version is not None \
+        else (existing or {}).get("appVersion")
+
+    catalog = cat.assemble(entries, default_pack_id=effective_default,
+                           app_version=effective_appver)
     visible = [p["packId"] for p in catalog["packs"] if p["launch"]["visible"]]
     if not visible and not allow_hidden:
         raise PromotionError(
@@ -387,30 +544,52 @@ def _run(args, packs_root, target, catalog_path):
         out("RESULT: UP TO DATE - nothing was written.")
         return EXIT_OK
 
-    old_dir = os.path.join(packs_root, ".promote-old-%s" % args.pack)
+    # The prior catalog bytes are retained so a post-publish failure can restore
+    # them exactly (or remove a catalog this run created).
+    prior_catalog_bytes = None
+    if os.path.isfile(catalog_path):
+        with open(catalog_path, "rb") as fh:
+            prior_catalog_bytes = fh.read()
+
+    # Deferred publish: the saved old directory and journal survive until the
+    # catalog is regenerated AND written, so a catalog/legacy validation failure
+    # rolls the candidate pack back rather than leaving it half-promoted.
+    inventory, old_dir, journal, had_prior = publish(
+        target, payload, packs_root, args.pack, finalize=False)
+
     try:
-        inventory = publish(target, payload, packs_root, args.pack)
+        catalog, catalog_bytes = regenerate_catalog(
+            args.app_root, args.build_root, catalog_path,
+            args.default_pack, args.app_version, args.allow_draft)
+
+        parent = os.path.dirname(os.path.abspath(catalog_path))
+        if parent and not os.path.isdir(parent):
+            os.makedirs(parent)
+        tmp = catalog_path + ".tmp"
+        try:
+            emit._fsync_write(tmp, catalog_bytes)
+            os.replace(tmp, catalog_path)
+        finally:
+            if os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
     except BaseException:
-        rollback_target(target, old_dir)
+        # Restore the prior pack directory and the prior catalog exactly.
+        rollback_published(target, old_dir, journal, had_prior)
+        try:
+            if prior_catalog_bytes is None:
+                if os.path.isfile(catalog_path):
+                    os.remove(catalog_path)
+            else:
+                with open(catalog_path, "wb") as fh:
+                    fh.write(prior_catalog_bytes)
+        except OSError:
+            pass
         raise
 
-    catalog, catalog_bytes = regenerate_catalog(
-        args.app_root, args.build_root, catalog_path,
-        args.default_pack, args.app_version, args.allow_draft)
-
-    parent = os.path.dirname(os.path.abspath(catalog_path))
-    if parent and not os.path.isdir(parent):
-        os.makedirs(parent)
-    tmp = catalog_path + ".tmp"
-    try:
-        emit._fsync_write(tmp, catalog_bytes)
-        os.replace(tmp, catalog_path)
-    finally:
-        if os.path.exists(tmp):
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
+    finalize_publish(old_dir, journal)
 
     out("")
     out("Promoted:")

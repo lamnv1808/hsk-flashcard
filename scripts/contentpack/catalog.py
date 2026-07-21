@@ -205,6 +205,44 @@ def read_manifest_js(path):
     return doc
 
 
+def read_catalog_js(path):
+    """Parse the canonical `window.FLASHEDU_CATALOG = {...};` assignment as DATA.
+
+    Never executes JavaScript. Fails closed on a malformed or AMBIGUOUS catalog:
+    exactly one assignment must be present, and its value must be a JSON object
+    with a `packs` array. `js_json` neutralises `</` as `<\\/` and escapes
+    U+2028/U+2029 -- all valid JSON escapes -- so `json.loads` reverses them.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            text = fh.read()
+    except (OSError, UnicodeDecodeError) as exc:
+        _fail("catalog", "cannot be read: %s" % exc)
+
+    marker = "window.FLASHEDU_CATALOG"
+    count = text.count(marker)
+    if count != 1:
+        _fail("catalog",
+              "must contain exactly one '%s' assignment (found %d)" % (marker, count))
+    after = text[text.index(marker) + len(marker):].lstrip()
+    if not after.startswith("="):
+        _fail("catalog", "'%s' is not a simple assignment" % marker)
+    after = after[1:].lstrip()
+    if not after.startswith("{"):
+        _fail("catalog", "assignment value must be a JSON object")
+    # Slice the balanced object: first '{' to the last '}' before the trailing ';'.
+    end = after.rfind("}")
+    if end < 0:
+        _fail("catalog", "assignment value is not terminated")
+    try:
+        doc = json.loads(after[:end + 1])
+    except ValueError as exc:
+        _fail("catalog", "assignment is not valid JSON: %s" % exc)
+    if not isinstance(doc, dict) or not isinstance(doc.get("packs"), list):
+        _fail("catalog", "must be a JSON object with a 'packs' array")
+    return doc
+
+
 # --------------------------------------------------------------------------
 # entry construction
 # --------------------------------------------------------------------------

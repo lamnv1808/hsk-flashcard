@@ -23,8 +23,59 @@ sys.path.insert(0, os.path.join(ROOT, "scripts"))
 sys.path.insert(0, os.path.join(ROOT, "tests", "support"))
 sys.path.insert(0, os.path.join(ROOT, "tests", "fixtures", "packs"))
 
+import hashlib                                   # noqa: E402
 import packlib                                   # noqa: E402
 from datajs import emit                          # noqa: E402
+from contentpack import catalog as cat           # noqa: E402
+
+
+def _sha_prefixed(data):
+    return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+def make_legacy_root(app, cards_bytes=b"window.HSK_CARDS=[];\n",
+                     manifest_bytes=b"/* hsk adapter */\n",
+                     mutate=None):
+    """Seed an app root that already has HSK promoted as a LEGACY pack.
+
+    Writes the two runtime files (data.js + packs/hsk/hsk-content-pack.js) and a
+    catalog.js whose single entry is a coherent legacy-installed HSK descriptor
+    matching those bytes. `mutate(entry)` may corrupt the entry before it is
+    written, for the negative cases.
+    """
+    packs = os.path.join(app, "packs", "hsk")
+    os.makedirs(packs)
+    with open(os.path.join(app, "data.js"), "wb") as fh:
+        fh.write(cards_bytes)
+    with open(os.path.join(packs, "hsk-content-pack.js"), "wb") as fh:
+        fh.write(manifest_bytes)
+    entry = {
+        "packId": "hsk", "version": "1.0.0", "title": "HSK",
+        "courseId": "hsk", "courseType": "exam", "status": "launch",
+        "languageProfile": {"target": "zh-CN"},
+        "idRange": {"min": 1, "max": 999999},
+        "allocated": {"count": 0, "min": None, "max": None},
+        "launch": {"visible": True, "readiness": "launch"},
+        "sourceChecksum": _sha_prefixed(b"workbook"),
+        "contentChecksum": _sha_prefixed(cards_bytes),
+        "cardsPath": "data.js",
+        "manifestPath": "packs/hsk/hsk-content-pack.js",
+        "install": {"kind": "legacy-installed",
+                    "sourceChecksumBasis": "raw-workbook-bytes"},
+        "runtimeAssets": {
+            "cards": {"path": "data.js", "sha256": _sha_prefixed(cards_bytes),
+                      "bytes": len(cards_bytes)},
+            "manifest": {"path": "packs/hsk/hsk-content-pack.js",
+                         "sha256": _sha_prefixed(manifest_bytes),
+                         "bytes": len(manifest_bytes)},
+        },
+    }
+    if mutate:
+        mutate(entry)
+    catalog = cat.assemble([entry], default_pack_id="hsk")
+    with open(os.path.join(app, "packs", "catalog.js"), "wb") as fh:
+        fh.write(cat.render_catalog_js(catalog))
+    return entry
 
 BUILD_CLI = os.path.join(ROOT, "scripts", "build_content_pack.py")
 PROMOTE_CLI = os.path.join(ROOT, "scripts", "promote_content_pack.py")
@@ -257,6 +308,144 @@ def main():
               rc == EXIT_FATAL)
         check("the orphan is named", "orphan" in text)
         shutil.rmtree(orphan)
+
+        # --- legacy-installed HSK coexists with a generated pack ---------------
+        # HSK has no build handoff by design; it must survive alongside alpha.
+        lapp = os.path.join(tmp, "legacy app")
+        os.makedirs(lapp)
+        legacy_entry = make_legacy_root(lapp)
+        rc, text = run(PROMOTE_CLI, ["--pack", "alpha", "--app-root", lapp,
+                                     "--build-root", build_root])
+        check("legacy HSK + generated alpha promotes", rc == EXIT_OK)
+        lcat_path = os.path.join(lapp, "packs", "catalog.js")
+        lcat = cat.read_catalog_js(lcat_path)
+        by_id = {p["packId"]: p for p in lcat["packs"]}
+        check("catalog contains both hsk and alpha",
+              set(by_id) == {"hsk", "alpha"})
+        check("legacy HSK descriptor is structurally unchanged",
+              by_id.get("hsk") == legacy_entry)
+        check("defaultPackId remains hsk", lcat.get("defaultPackId") == "hsk")
+        check("alpha entry came from its handoff (has no legacy install)",
+              "install" not in by_id.get("alpha", {}))
+        check("alpha manifest promoted alongside HSK",
+              os.path.isfile(os.path.join(lapp, "packs", "alpha",
+                                          "alpha-content-pack.js")))
+
+        # Repeat generation is byte-identical.
+        with open(lcat_path, "rb") as fh:
+            first_bytes = fh.read()
+        rc, _ = run(PROMOTE_CLI, ["--pack", "alpha", "--app-root", lapp,
+                                  "--build-root", build_root])
+        check("repeat legacy+generated promotion is byte-stable",
+              rc == EXIT_OK)
+        with open(lcat_path, "rb") as fh:
+            check("catalog bytes are identical on re-run", fh.read() == first_bytes)
+
+        # --- a forged legacy entry is rejected ---------------------------------
+        # No catalog claim can substitute for matching deployed bytes.
+        forged = os.path.join(tmp, "forged app")
+        os.makedirs(forged)
+        make_legacy_root(forged, mutate=lambda e: e["runtimeAssets"]["cards"]
+                         .__setitem__("sha256", "sha256:" + "0" * 64))
+        rc, text = run(PROMOTE_CLI, ["--pack", "alpha", "--app-root", forged,
+                                     "--build-root", build_root])
+        check("forged legacy checksum fails promotion", rc == EXIT_FATAL)
+        check("the checksum mismatch is reported", "sha256 mismatch" in text)
+
+        # A wrong byte count is likewise rejected.
+        badbytes = os.path.join(tmp, "badbytes app")
+        os.makedirs(badbytes)
+        make_legacy_root(badbytes,
+                         mutate=lambda e: e["runtimeAssets"]["cards"]
+                         .__setitem__("bytes", 999999))
+        rc, text = run(PROMOTE_CLI, ["--pack", "alpha", "--app-root", badbytes,
+                                     "--build-root", build_root])
+        check("legacy byte-count mismatch fails promotion", rc == EXIT_FATAL)
+
+        # --- a missing legacy runtime asset is rejected ------------------------
+        missing = os.path.join(tmp, "missing app")
+        os.makedirs(missing)
+        make_legacy_root(missing)
+        os.remove(os.path.join(missing, "data.js"))
+        rc, text = run(PROMOTE_CLI, ["--pack", "alpha", "--app-root", missing,
+                                     "--build-root", build_root])
+        check("missing legacy runtime asset fails promotion", rc == EXIT_FATAL)
+
+        # --- an escaping legacy path is rejected -------------------------------
+        escaping = os.path.join(tmp, "escaping app")
+        os.makedirs(escaping)
+        make_legacy_root(escaping,
+                         mutate=lambda e: e.__setitem__("cardsPath", "../evil.js"))
+        rc, text = run(PROMOTE_CLI, ["--pack", "alpha", "--app-root", escaping,
+                                     "--build-root", build_root])
+        check("escaping legacy path fails promotion", rc == EXIT_FATAL)
+
+        # A manifest that does not live under packs/<id>/ is not "belonging".
+        strayman = os.path.join(tmp, "strayman app")
+        os.makedirs(strayman)
+        make_legacy_root(strayman,
+                         mutate=lambda e: e.__setitem__("manifestPath", "data.js"))
+        rc, text = run(PROMOTE_CLI, ["--pack", "alpha", "--app-root", strayman,
+                                     "--build-root", build_root])
+        check("legacy manifest outside packs/<id>/ fails promotion",
+              rc == EXIT_FATAL)
+
+        # --- an orphan directory still fails even with a legacy catalog --------
+        # A legacy catalog does not launder an unrelated handoff-less directory.
+        orphan2app = os.path.join(tmp, "orphan2 app")
+        os.makedirs(orphan2app)
+        make_legacy_root(orphan2app)
+        odir = os.path.join(orphan2app, "packs", "mystery")
+        os.makedirs(odir)
+        with open(os.path.join(odir, "mystery-cards.js"), "w") as fh:
+            fh.write("//")
+        rc, text = run(PROMOTE_CLI, ["--pack", "alpha", "--app-root", orphan2app,
+                                     "--build-root", build_root])
+        check("handoff-less non-legacy dir still fails with a legacy catalog",
+              rc == EXIT_FATAL)
+
+        # --- overlapping ranges and duplicate ids still fail -------------------
+        over_ov = dict(LAUNCHABLE)
+        over_ov.update({"packId": "beta", "courseId": "beta",
+                        "idRange.min": "1", "idRange.max": "999999"})  # overlaps HSK
+        build("synth-en", "beta", over_ov)
+        ovapp = os.path.join(tmp, "overlap app")
+        os.makedirs(ovapp)
+        make_legacy_root(ovapp)
+        rc, text = run(PROMOTE_CLI, ["--pack", "beta", "--app-root", ovapp,
+                                     "--build-root", build_root])
+        check("range overlap with legacy HSK fails promotion", rc == EXIT_FATAL)
+
+        # --- post-publish failure restores the prior target and catalog --------
+        # Force regeneration to fail AFTER alpha is published by corrupting the
+        # existing legacy catalog entry between the first and second promotion.
+        atomic = os.path.join(tmp, "atomic app")
+        os.makedirs(atomic)
+        make_legacy_root(atomic)
+        rc, _ = run(PROMOTE_CLI, ["--pack", "alpha", "--app-root", atomic,
+                                  "--build-root", build_root])
+        check("atomic: baseline promotion ok", rc == EXIT_OK)
+        acat = os.path.join(atomic, "packs", "catalog.js")
+        with open(acat, "rb") as fh:
+            good_catalog = fh.read()
+        alpha_target = os.path.join(atomic, "packs", "alpha")
+        alpha_before = snapshot(alpha_target)
+        # Corrupt the legacy runtime asset so the NEXT regenerate fails post-publish.
+        with open(os.path.join(atomic, "data.js"), "ab") as fh:
+            fh.write(b"// tampered\n")
+        rc, text = run(PROMOTE_CLI, ["--pack", "alpha", "--app-root", atomic,
+                                     "--build-root", build_root])
+        check("atomic: tampered legacy asset fails the re-promotion",
+              rc == EXIT_FATAL)
+        check("atomic: alpha directory restored to prior bytes",
+              snapshot(alpha_target) == alpha_before)
+        # data.js is tampered, so the restored catalog stays the prior one and no
+        # partial/new catalog was written.
+        with open(acat, "rb") as fh:
+            check("atomic: catalog restored to prior bytes", fh.read() == good_catalog)
+        check("atomic: no promotion journal left behind",
+              not os.path.isfile(os.path.join(atomic, "packs",
+                                              ".promote-txn-alpha.json")))
 
         # --- source hygiene -------------------------------------------------------
         with open(PROMOTE_CLI, encoding="utf-8") as fh:
