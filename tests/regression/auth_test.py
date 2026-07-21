@@ -8,6 +8,24 @@ CONFIG_JS = 'window.SUPABASE_CONFIG={url:"%s",anonKey:"anon-mock-key"};' % MOCK
 
 pushed = []   # rpc sync_push_progress bodies
 
+
+def ascii_safe(text):
+    """Render the result line so a default Windows cp1252 console cannot crash it.
+
+    This suite legitimately observes Vietnamese UI strings (the local-only action
+    reads "Hoc khong can tai khoan" with diacritics, and the login/lockout
+    messages carry them too). Printing those straight to a cp1252 stdout raises
+    UnicodeEncodeError AFTER every assertion has already run, turning a passing
+    suite into a spurious failure -- `tests/run_regression.py` only hides it by
+    forcing PYTHONIOENCODING=utf-8.
+
+    Escaping rather than stripping keeps the information: a character cp1252
+    cannot represent appears as its \\uXXXX escape instead of being dropped.
+    Same helper as tests/browser/test_pack_course_picker.py.
+    """
+    return str(text).encode("ascii", "backslashreplace").decode("ascii")
+
+
 def setup_routes(ctx):
     # Serve a configured supabase-config.js (real file stays blank in the repo)
     def cfg(route):
@@ -261,5 +279,7 @@ out["pass"]=bool(out.get("pageerrors")==[] and out.get("gate_shown") and out.get
                  and out.get("F_isolation")
                  and out.get("G_fresh_context_gate") and out.get("G_needs_auth")
                  and out.get("G_no_mode_key") is None)
-print(json.dumps(out, ensure_ascii=False))
+# json.dumps already escapes non-ASCII (ensure_ascii defaults to True); the
+# wrapper makes that guarantee explicit rather than incidental.
+print(ascii_safe(json.dumps(out)))
 import sys as _sys; _sys.exit(0 if out.get("pass") else 1)
