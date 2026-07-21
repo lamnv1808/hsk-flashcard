@@ -8,9 +8,19 @@ content — a human supplies properly licensed material.
 
 ```
 docs/content/templates/
-  ielts/  manifest.template.csv  levels.template.csv  cards.template.csv
-  toeic/  manifest.template.csv  levels.template.csv  cards.template.csv
+  ielts/  ielts-intake.template.xlsx   <- easiest: one workbook, three tabs
+          manifest.template.csv  levels.template.csv  cards.template.csv
+  toeic/  toeic-intake.template.xlsx
+          manifest.template.csv  levels.template.csv  cards.template.csv
 ```
+
+**Pick ONE of two ways to deliver a course** - the pipeline accepts either:
+
+- **Excel (recommended):** fill `<course>-intake.template.xlsx`. One file, three
+  tabs (`manifest`, `cards`, `levels`), already formatted as Text.
+- **CSV:** fill the three `.template.csv` files.
+
+Do not send both for the same course.
 
 ## Why `.template.csv`
 

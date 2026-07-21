@@ -22,9 +22,20 @@ source_data/ielts/
   cards.csv       the cards                  (one row per card)
 ```
 
-A single `.xlsx` workbook works too: use three sheets named exactly `manifest`,
-`cards` and `levels`. `manifest` and `cards` are required; `levels` is optional
-but strongly recommended so decks get real titles.
+**Or one Excel workbook** with three sheets named exactly `manifest`, `cards`
+and `levels`. `manifest` and `cards` are required; `levels` is optional but
+strongly recommended so decks get real titles.
+
+A ready-made, pre-formatted workbook is provided per course:
+
+```
+docs/content/templates/ielts/ielts-intake.template.xlsx
+docs/content/templates/toeic/toeic-intake.template.xlsx
+```
+
+Deliver **either** a filled workbook **or** the three renamed CSVs for a course
+-- not both. The workbook is usually easier: it is one file, the tabs and
+headers already exist, and every cell is pre-formatted as Text.
 
 Everything must be **UTF-8**. Headers must match exactly — the pipeline binds
 columns by name and a duplicate or unknown header is a fatal error, so a typo
@@ -43,6 +54,42 @@ cp docs/content/templates/ielts/cards.template.csv    source_data/ielts/cards.cs
 ```
 
 (Use `toeic` for TOEIC. On Windows PowerShell use `Copy-Item` instead of `cp`.)
+
+## 2b. Filling the Excel workbook
+
+1. Copy it out of `docs/` and rename it, e.g.
+   `source_data/ielts/ielts.xlsx`. Never fill the file in `docs/`.
+2. Fill the `manifest` tab: `title`, then the provenance block when you know it.
+   Leave the pre-filled identity rows alone.
+3. Fill `levels`: one row per deck.
+4. Fill `cards`: one row per card. Delete whole optional COLUMNS you do not use.
+5. Save as `.xlsx` (not `.xls`, not `.xlsm`, not CSV).
+
+### Excel will try to "help" - do not let it
+
+Every cell in the template is pre-formatted as **Text** for a reason. If a cell
+is switched back to General, Excel silently rewrites what you typed and the
+strict reader then rejects the file or, worse, imports the wrong value:
+
+| You type | Excel stores as General | Consequence |
+|---|---|---|
+| `1000000` | the number 1000000 | manifest value is no longer a string |
+| `007` | `7` | a `sourceKey` silently changes identity |
+| `03-14` | a date | a deck code becomes a date |
+| `=SUM(...)` | a formula | **fatal** - formulas are rejected outright |
+
+Rules:
+
+- keep the cells formatted as **Text**; paste with *Paste Special -> Values* or
+  *Match Destination Formatting*, never a plain paste of styled content
+- **no formulas anywhere** - a cached formula result depends on whoever last
+  recalculated the workbook, so the importer refuses them
+- no merged cells, no hidden rows, no hidden columns, no hidden sheets
+- do not rename, reorder or delete the three tabs
+- do not add extra tabs, macros, comments, images or links to other workbooks
+- do not add an `id` column
+
+If Excel reformats something, set the range back to Text and re-enter the value.
 
 ## 3. Reserved id ranges — already set, never change
 
