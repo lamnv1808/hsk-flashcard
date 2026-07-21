@@ -189,15 +189,50 @@ function speak(items){
 }
 
 function currentCard(){ return session[sessionState.currentIndex]; }
-function speakWord(){ const c = currentCard(); if(c) speak([{ text: c.word, lang: "zh-CN", el: $("word") }]); }       // never reads pinyin
-function speakExample(){ const c = currentCard(); if(c) speak([{ text: c.example, lang: "zh-CN", el: $("example") }]); } // never reads pinyin
-// Read All: Chinese word -> 500ms pause -> Chinese example. No pinyin, no Vietnamese by default.
+
+// ---- Pack-driven audio (Phase 24E) --------------------------------------
+// Locale and the spoken fields come from the active pack's audio policy, not a
+// hardcoded language. HSK declares { locale:"zh-CN", readFields:["primaryPrompt",
+// "exampleText"] }, so word/example still read Chinese in the same order and
+// pinyin/translation are still never spoken. A pack without audio config, an
+// unmapped role, or empty text simply no-ops. The speech queue, rate,
+// cancellation and voice selection are unchanged.
+function packAudio(){
+  const p = window.HSKUtil && window.HSKUtil.contentPack;
+  const a = (p && p.getAudio) ? p.getAudio() : null;
+  return (a && typeof a === "object") ? a : null;
+}
+function audioLocale(){ const a = packAudio(); return (a && a.locale) || "zh-CN"; }
+function readFieldRoles(){
+  const a = packAudio();
+  return (a && Array.isArray(a.readFields) && a.readFields.length)
+    ? a.readFields : ["primaryPrompt", "exampleText"];
+}
+// Which display element highlights while a role is spoken (visual feedback only).
+const AUDIO_ROLE_EL = { primaryPrompt: "word", exampleText: "example" };
+function audioItem(card, role, extra){
+  const p = window.HSKUtil && window.HSKUtil.contentPack;
+  const field = (p && p.getRole) ? p.getRole(role) : null;
+  if(!field) return null;                       // unmapped role -> no-op
+  const text = card[field];
+  if(text == null || text === "") return null;  // missing text -> no-op
+  const item = { text: text, lang: audioLocale() };
+  const elId = AUDIO_ROLE_EL[role];
+  if(elId && $(elId)) item.el = $(elId);
+  if(extra) for(const k in extra) item[k] = extra[k];
+  return item;
+}
+function speakWord(){ const c = currentCard(); if(!c) return; const it = audioItem(c, readFieldRoles()[0]); if(it) speak([it]); }       // never reads pronunciation/translation
+function speakExample(){ const c = currentCard(); if(!c) return; const it = audioItem(c, readFieldRoles()[1]); if(it) speak([it]); } // never reads pronunciation/translation
+// Read All: each configured readField in order, a 500ms pause between them.
 function readAll(){
   const c = currentCard(); if(!c) return;
-  speak([
-    { text: c.word, lang: "zh-CN", el: $("word"), pauseAfter: 500 },
-    { text: c.example, lang: "zh-CN", el: $("example") }
-  ]);
+  const roles = readFieldRoles(), items = [];
+  for(let i=0;i<roles.length;i++){
+    const it = audioItem(c, roles[i], (i < roles.length-1) ? { pauseAfter: 500 } : null);
+    if(it) items.push(it);
+  }
+  if(items.length) speak(items);
 }
 const views = ["homeView","studyView","completeView"];
 function showView(id){

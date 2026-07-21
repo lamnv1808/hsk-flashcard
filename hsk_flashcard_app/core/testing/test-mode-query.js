@@ -48,12 +48,18 @@
 
     function typeDef(id) { for (var i = 0; i < TYPE_DEFS.length; i++) if (TYPE_DEFS[i].id === id) return TYPE_DEFS[i]; return null; }
     function getTypeDefs() { return TYPE_DEFS.map(function (t) { return { id: t.id, label: t.label, q: t.q, a: t.a.slice() }; }); }
+    // The valid mode ids for THIS pack, derived from its definitions -- never the
+    // hardcoded [1..6]. A pack may declare one mode or twenty.
+    function allTypeIds() { return TYPE_DEFS.map(function (t) { return t.id; }); }
 
-    function qField(type) { return typeDef(type).q; }
-    function answerLines(card, type) { return typeDef(type).a.map(function (f) { return trim(card[f]); }); }
+    // An unknown/malformed type id must never crash a build. typeDef() returns
+    // null for one, so each of these treats an unknown id as "no valid question"
+    // rather than dereferencing null.
+    function qField(type) { var d = typeDef(type); return d ? d.q : null; }
+    function answerLines(card, type) { var d = typeDef(type); return d ? d.a.map(function (f) { return trim(card[f]); }) : []; }
     function answerKey(card, type) { return answerLines(card, type).join(""); }
-    function answerValid(card, type) { return typeDef(type).a.every(function (f) { return trim(card[f]) !== ""; }); }
-    function questionValid(card, type) { return trim(card[qField(type)]) !== "" && answerValid(card, type); }
+    function answerValid(card, type) { var d = typeDef(type); return !!d && d.a.every(function (f) { return trim(card[f]) !== ""; }); }
+    function questionValid(card, type) { var qf = qField(type); return qf != null && trim(card[qf]) !== "" && answerValid(card, type); }
 
     // Eligible-card pool for the selected levels, in SOURCE ORDER (matches the
     // original CARDS.filter). getAll() is the live source array; .filter() copies.
@@ -118,7 +124,12 @@
     function createSession(cfg) {
       cfg = cfg || {};
       var pool = getEligibleCards({ levels: cfg.levels || [] });
-      var types = cfg.mix ? [1, 2, 3, 4, 5, 6] : (cfg.types || []).slice();
+      // Mix = all of THIS pack's modes. Otherwise the requested ids, filtered to
+      // ones this pack actually defines so a stale/foreign id cannot break the
+      // round-robin assignment below. Empty selection falls back to all modes.
+      var types = cfg.mix ? allTypeIds()
+        : (cfg.types || []).filter(function (id) { return typeDef(id) !== null; });
+      if (!types.length) types = allTypeIds();
       var N = cfg.count === "all" ? pool.length : Math.min(parseInt(cfg.count, 10), pool.length);
       var cardOrder = SH.shuffledCopy(pool, rnd);
       // balanced type assignment: round-robin then shuffle
@@ -137,6 +148,7 @@
 
     return {
       getTypeDefs: getTypeDefs,
+      getAllTypeIds: allTypeIds,
       typeDef: typeDef,
       qField: qField,
       answerLines: answerLines,

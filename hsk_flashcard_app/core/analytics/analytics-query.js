@@ -63,8 +63,16 @@
         if (st.reps > 0) learned++;
         if ((!levelSet || levelSet[c.level] === true) && st.due <= todayStr) dueCount++;
       }
+      // attempts/correct/retention must reflect the ACTIVE pack only. Progress
+      // rows are one global integer namespace, so a foreign pack's rows sit in
+      // the same store; counting them would leak another course into this
+      // course's retention. Resolve each id through the active CardRepository
+      // and skip any it does not own -- the exact guard Weak Words already uses.
       var attempts = 0, correct = 0, keys = progressRepo.getCardIds();
-      for (var k = 0; k < keys.length; k++) { var x = progressRepo.getStored(keys[k]); attempts += (x.attempts || 0); correct += (x.correct || 0); }
+      for (var k = 0; k < keys.length; k++) {
+        if (!repo.getById(Number(keys[k]))) continue;   // foreign row -> contributes zero
+        var x = progressRepo.getStored(keys[k]); attempts += (x.attempts || 0); correct += (x.correct || 0);
+      }
 
       var retentionPct = attempts ? Math.round(correct / attempts * 100) : 0;
       return {

@@ -1,5 +1,5 @@
 
-const CACHE='hsk-flashcards-v39';
+const CACHE='hsk-flashcards-v40';
 const ASSETS=[
   './','index.html','styles.css','app.js','data.js','manifest.webmanifest',
   'core/platform/platform.js',

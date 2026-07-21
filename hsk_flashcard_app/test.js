@@ -19,7 +19,7 @@
   var LEVELS = window.HSKUtil.contentPack.getDeckIds();   // deck identity/order from the active pack (Phase 11)
 
   // -------- setup state (independent of Study Mode) --------
-  var setup = { levels: [LEVELS[0] || "HSK1"], count: "20", types: [1, 2, 3, 4, 5, 6], mix: false };
+  var setup = { levels: [LEVELS[0] || "HSK1"], count: "20", types: TMQ.getAllTypeIds(), mix: false };  // ids from the active pack, not [1..6]
   var state = null; // active test session
 
   // ---------------- utils ----------------
@@ -105,7 +105,7 @@
   // ---------------- quiz ----------------
   function startTest() {
     if (!setup.levels.length) { return msg("Chọn ít nhất một cấp độ."); }
-    var types = setup.mix ? [1, 2, 3, 4, 5, 6] : setup.types.slice();
+    var types = setup.mix ? TMQ.getAllTypeIds() : setup.types.slice();
     if (!types.length) { return msg("Chọn ít nhất một dạng câu hỏi."); }
     var questions = buildTest(setup);
     if (!questions.length) { return msg("Không tạo được câu hỏi từ lựa chọn này."); }
@@ -204,10 +204,36 @@
     else renderQuestion();
   }
 
-  // ---------------- audio on answer side (Chinese only; reuse engine) ----------------
-  function speakWord() { if (state) window.speak([{ text: state.questions[state.current].card.word, lang: "zh-CN", el: $("testAnsWord") }]); }
-  function speakExample() { if (state) window.speak([{ text: state.questions[state.current].card.example, lang: "zh-CN", el: $("testAnsExample") }]); }
-  function readAll() { if (!state) return; var c = state.questions[state.current].card; window.speak([{ text: c.word, lang: "zh-CN", el: $("testAnsWord"), pauseAfter: 500 }, { text: c.example, lang: "zh-CN", el: $("testAnsExample") }]); }
+  // ---------------- audio on answer side (pack locale + readFields; reuse engine) ----------------
+  // Locale and spoken fields come from the active pack (Phase 24E). HSK stays
+  // zh-CN reading primaryPrompt then exampleText. Test Mode uses its own answer
+  // elements; role->element is mapped here. Missing config/role/text no-ops.
+  var PACK = window.HSKUtil && window.HSKUtil.contentPack;
+  var TEST_AUDIO_EL = { primaryPrompt: "testAnsWord", exampleText: "testAnsExample" };
+  function pkAudio() { var a = (PACK && PACK.getAudio) ? PACK.getAudio() : null; return (a && typeof a === "object") ? a : null; }
+  function pkLocale() { var a = pkAudio(); return (a && a.locale) || "zh-CN"; }
+  function pkRoles() { var a = pkAudio(); return (a && Array.isArray(a.readFields) && a.readFields.length) ? a.readFields : ["primaryPrompt", "exampleText"]; }
+  function audioItem(card, role, extra) {
+    var field = (PACK && PACK.getRole) ? PACK.getRole(role) : null;
+    if (!field) return null;
+    var text = card[field];
+    if (text == null || text === "") return null;
+    var item = { text: text, lang: pkLocale() };
+    var elId = TEST_AUDIO_EL[role]; if (elId && $(elId)) item.el = $(elId);
+    if (extra) for (var k in extra) item[k] = extra[k];
+    return item;
+  }
+  function speakWord() { if (!state) return; var it = audioItem(state.questions[state.current].card, pkRoles()[0]); if (it) window.speak([it]); }
+  function speakExample() { if (!state) return; var it = audioItem(state.questions[state.current].card, pkRoles()[1]); if (it) window.speak([it]); }
+  function readAll() {
+    if (!state) return;
+    var c = state.questions[state.current].card, roles = pkRoles(), items = [];
+    for (var i = 0; i < roles.length; i++) {
+      var it = audioItem(c, roles[i], (i < roles.length - 1) ? { pauseAfter: 500 } : null);
+      if (it) items.push(it);
+    }
+    if (items.length) window.speak(items);
+  }
 
   // ---------------- results ----------------
   function finishTest() {
@@ -294,10 +320,37 @@
   }
 
   // ---------------- local per-user history (NOT synced) ----------------
-  function historyKey() { var u = window.HSK_AUTH; return "hsk_test_history" + (u && u.userId ? "::" + u.userId : ""); }
-  function loadHistory() { try { var v = JSON.parse(localStorage.getItem(historyKey()) || "[]"); return Array.isArray(v) ? v : []; } catch (_) { return []; } }
+  // Test history is scoped by active pack AND account (Phase 24E), so two
+  // courses never share a history. The legacy owner is whichever pack the
+  // catalog declares as default -- identified via FLASHEDU_CATALOG.defaultPackId,
+  // never a hardcoded HSK branch -- so its pre-existing entries stay readable
+  // and an older build (which knows only the legacy key) still works.
+  var PACK_ID = window.HSKUtil.contentPack.getPackId();
+  function acctSuffix() { var u = window.HSK_AUTH; return (u && u.userId) ? "::" + u.userId : ""; }
+  function legacyKey() { return "hsk_test_history" + acctSuffix(); }
+  function historyKey() { return "hsk_test_history::" + PACK_ID + acctSuffix(); }
+  function isDefaultPack() {
+    try { var c = window.FLASHEDU_CATALOG; return !!c && PACK_ID === c.defaultPackId; }
+    catch (_) { return false; }
+  }
+  function loadHistory() {
+    try {
+      var raw = localStorage.getItem(historyKey());
+      // Default pack only: fall back to the legacy key when the pack-scoped key
+      // is absent, so existing history is preserved. Non-default packs never
+      // read it, so they cannot inherit another course's history.
+      if (raw == null && isDefaultPack()) raw = localStorage.getItem(legacyKey());
+      var v = JSON.parse(raw || "[]"); return Array.isArray(v) ? v : [];
+    } catch (_) { return []; }
+  }
   function saveHistory(entry) {
-    try { var list = loadHistory(); list.unshift(entry); list = list.slice(0, 20); localStorage.setItem(historyKey(), JSON.stringify(list)); } catch (_) {}
+    try {
+      var list = loadHistory(); list.unshift(entry); list = list.slice(0, 20);
+      localStorage.setItem(historyKey(), JSON.stringify(list));
+      // Default-pack saves are mirrored to the legacy key so a rollback to an
+      // older build still shows them. Non-default packs must never write it.
+      if (isDefaultPack()) localStorage.setItem(legacyKey(), JSON.stringify(list));
+    } catch (_) {}
   }
   function todayStr() { return window.HSKUtil.date.isoDay(); }   // UTC day (delegates)
   function nowMs() { try { return Date.now(); } catch (_) { return 0; } }
@@ -342,7 +395,7 @@
   var mix = $("testMix");
   if (mix) mix.onchange = function () {
     setup.mix = mix.checked;
-    if (setup.mix) setup.types = [1, 2, 3, 4, 5, 6];
+    if (setup.mix) setup.types = TMQ.getAllTypeIds();
     renderTypePicker();
   };
   var cnt = $("testCount");

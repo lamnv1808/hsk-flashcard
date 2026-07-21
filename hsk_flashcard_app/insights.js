@@ -10,6 +10,7 @@
   var ANALYTICS = window.HSKUtil.analytics;   // shared read-only AnalyticsQuery (Phase 6)
   var MQ = window.HSKUtil.userMetadata;   // shared read-only UserMetadataQuery (Phase 7)
   var LEVELS = window.HSKUtil.contentPack.getDeckIds();   // deck identity/order from the active pack (Phase 11)
+  var PACK = window.HSKUtil.contentPack;   // active pack (Phase 24E: search fields)
   function trim(x) { return String(x == null ? "" : x).trim(); }
   function setActive(id) { document.querySelectorAll(".view").forEach(function (v) { v.classList.toggle("active", v.id === id); }); }
   function goHome() { if (window.stopSpeech) window.stopSpeech(); document.body.classList.remove("testing"); setActive("homeView"); if (window.renderHome) window.renderHome(); }
@@ -129,11 +130,30 @@
   // Bookmark-card resolution now via the read-only UserMetadataQuery (Phase 7):
   // requested (insertion) order, numeric ids, skips missing — unchanged.
   function bookmarkCards() { return MQ.getBookmarkedCards(); }
+  // Search fields come from the active pack (Phase 24E). HSK declares
+  // ["primaryPrompt","pronunciation","definition"] -> word/pinyin/meaning, so
+  // matching is unchanged. A pack without search config falls back to
+  // primaryPrompt only. Only DEFINED values are joined, so a pack missing a
+  // field never puts the literal "undefined" into the haystack.
+  function searchRoles() {
+    var s = (PACK && PACK.getSearch) ? PACK.getSearch() : null;
+    return (s && Array.isArray(s.fields) && s.fields.length) ? s.fields : ["primaryPrompt"];
+  }
+  function searchText(c) {
+    var roles = searchRoles(), parts = [];
+    for (var i = 0; i < roles.length; i++) {
+      var field = (PACK && PACK.getRole) ? PACK.getRole(roles[i]) : null;
+      if (!field) continue;
+      var v = c[field];
+      if (v != null && v !== "") parts.push(String(v));
+    }
+    return parts.join(" ").toLowerCase();
+  }
   function renderBookmarks() {
     var level = $("bmLevel").value, q = trim($("bmSearch").value).toLowerCase();
     var list = bookmarkCards().filter(function (c) {
       if (level !== "all" && c.level !== level) return false;
-      if (q && (c.word + " " + c.pinyin + " " + c.meaning).toLowerCase().indexOf(q) < 0) return false;
+      if (q && searchText(c).indexOf(q) < 0) return false;
       return true;
     });
     var box = $("bmList"); box.innerHTML = "";
