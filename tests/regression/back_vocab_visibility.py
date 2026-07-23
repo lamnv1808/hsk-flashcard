@@ -216,6 +216,94 @@ with sync_playwright() as p:
                 check('layout %s rating buttons visible (mobile one-screen)' % tag, r['rateVisible'] == True)
             check('layout %s no page errors' % tag, len(e) == 0)
 
+    # ============ Dark/light card-text contrast (Web RC dark-flashcard-contrast hotfix) ============
+    # Pre-existing defect: .flashcard is a <button>, so card content inherited the UA
+    # buttontext (black) because .card-face set a background but no foreground color.
+    # In dark mode #word/#backWord/#meaning/#example/#translation were ~1.30:1 (invisible).
+    # The one-line fix .card-face{color:var(--text)} restores them; the three pinyin lines
+    # already declared var(--muted) and must stay muted-but-readable.
+    TEXT_IDS = ['word', 'backWord', 'meaning', 'example', 'translation']   # inherit var(--text)
+    MUTED_IDS = ['pinyin', 'backPinyin', 'examplePinyin']                   # explicit var(--muted)
+
+    # Runs in the page: computed color/background + WCAG contrast for each id, plus the
+    # resolved var(--text)/var(--muted) rgb so we can assert the element *is* that token.
+    CONTRAST_JS = r"""(ids)=>{
+      function parse(c){ const m=(c||'').match(/[\d.]+/g)||[]; return m.slice(0,3).map(Number); }
+      function lum(p){ const f=p.map(v=>{v/=255; return v<=0.03928?v/12.92:Math.pow((v+0.055)/1.055,2.4);});
+                       return 0.2126*f[0]+0.7152*f[1]+0.0722*f[2]; }
+      function ratio(a,b){ const L1=lum(a),L2=lum(b); return (Math.max(L1,L2)+0.05)/(Math.min(L1,L2)+0.05); }
+      function effBg(el){ let n=el;
+        while(n && n!==document.documentElement){ const b=parse(getComputedStyle(n).backgroundColor);
+          const a=(getComputedStyle(n).backgroundColor.match(/[\d.]+/g)||[]).map(Number);
+          if(a.length<4 || a[3]>0.5){ if(b.length===3 && !(b[0]===0&&b[1]===0&&b[2]===0&&a.length===4&&a[3]===0)) return b; }
+          n=n.parentElement; }
+        return parse(getComputedStyle(document.body).backgroundColor); }
+      // resolved design tokens, read in the card-face scope
+      const probe=document.createElement('span'); const face=document.querySelector('.card-face');
+      face.appendChild(probe);
+      probe.style.color='var(--text)';  const rvText=parse(getComputedStyle(probe).color);
+      probe.style.color='var(--muted)'; const rvMuted=parse(getComputedStyle(probe).color);
+      probe.remove();
+      const out={ _text: rvText, _muted: rvMuted };
+      ids.forEach(id=>{ const el=document.getElementById(id); if(!el){ out[id]={present:false}; return; }
+        const cs=getComputedStyle(el); const fg=parse(cs.color); const bg=effBg(el);
+        const sameRv=(a,b)=>a.length===3&&b.length===3&&a[0]===b[0]&&a[1]===b[1]&&a[2]===b[2];
+        out[id]={ present:true, color:fg, bg:bg,
+                  contrast: Math.round(ratio(fg,bg)*100)/100,
+                  isText: sameRv(fg, rvText), isMuted: sameRv(fg, rvMuted) };
+      });
+      return out; }"""
+
+    def measure_faces(w, h, dark, mutate_black=False):
+        cx = b.new_context(viewport={'width': w, 'height': h})
+        cx.route('**/supabase-config.js', lambda r: r.fulfill(status=200, content_type='application/javascript', body=EMPTY))
+        pp = cx.new_page(); pe = []
+        pp.on('pageerror', lambda e: pe.append('PAGEERR:' + str(e)))
+        pp.on('console', lambda m: pe.append('CON:' + m.text) if m.type == 'error' else None)
+        pp.goto(URL); pp.wait_for_timeout(250); pp.evaluate('()=>localStorage.clear()'); pp.reload(); pp.wait_for_timeout(250)
+        if dark:
+            pp.evaluate("()=>{ document.body.classList.add('dark'); settings.dark=true; }")
+        pp.evaluate("()=>{ progress={}; save(); document.getElementById('sessionSize').value='10'; settings.showFrontPinyin=true; startStudy(['HSK1']); }")
+        pp.wait_for_timeout(120)
+        pp.evaluate("()=>{ if(!sessionState.flipped) flipCard(); }"); pp.wait_for_timeout(80)  # populate the back face too
+        if mutate_black:
+            # Simulate the ORIGINAL defect in a throwaway page: force the content ids back to
+            # UA-black so the new contrast assertion has something to catch. Never persisted.
+            pp.evaluate("""()=>{ const s=document.createElement('style'); s.id='__mut';
+                s.textContent='#word,#backWord,#meaning,#example,#translation{color:#000}'; document.head.appendChild(s); }""")
+            pp.wait_for_timeout(40)
+        m = pp.evaluate(CONTRAST_JS, TEXT_IDS + MUTED_IDS)
+        m['_errs'] = pe
+        cx.close()
+        return m
+
+    for (w, h) in [(1366, 768), (390, 844)]:
+        for dark in (False, True):
+            m = measure_faces(w, h, dark)
+            tag = '%dx%d/%s' % (w, h, 'dark' if dark else 'light')
+            for tid in TEXT_IDS:
+                d = m[tid]
+                check('contrast %s %s present' % (tag, tid), d.get('present') is True)
+                # the content text must resolve to the --text token (not UA black) ...
+                check('contrast %s %s color == var(--text)' % (tag, tid), d.get('isText') is True)
+                # ... and be readable against the computed card background (AA normal 4.5:1)
+                check('contrast %s %s >= 4.5:1 (got %s)' % (tag, tid, d.get('contrast')), d.get('contrast', 0) >= 4.5)
+            for tid in MUTED_IDS:
+                d = m[tid]
+                check('contrast %s %s color == var(--muted)' % (tag, tid), d.get('isMuted') is True)
+                check('contrast %s %s muted readable >= 4.5:1 (got %s)' % (tag, tid, d.get('contrast')), d.get('contrast', 0) >= 4.5)
+            check('contrast %s no page/console errors' % tag, len(m['_errs']) == 0)
+
+    # Mutation check — prove the new dark-mode assertion is not vacuous. With the fix removed
+    # (content forced to #000 in a throwaway page), dark contrast must collapse below 4.5:1.
+    mut = measure_faces(1366, 768, True, mutate_black=True)
+    mutation_caught = all(mut[t].get('contrast', 99) < 4.5 for t in TEXT_IDS)
+    check('mutation: forcing card text to #000 in dark makes it FAIL the >=4.5:1 assertion', mutation_caught)
+    # And confirm the real (un-mutated) dark build passes the same probe — the fix, not the harness.
+    real_dark = measure_faces(1366, 768, True)
+    check('mutation: the shipped dark build passes the same probe',
+          all(real_dark[t].get('contrast', 0) >= 4.5 and real_dark[t].get('isText') for t in TEXT_IDS))
+
     check('no console/page errors', len(errs) == 0)
     ctx.close(); b.close()
 

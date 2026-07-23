@@ -67,7 +67,7 @@ with sync_playwright() as p:
     ctx2.route(MOCK + "/**", block)
     errs2 = []
     # First load with sw.js unavailable, so stale caches can be seeded BEFORE any
-    # worker installs; the v42 activate handler must then delete every one of them.
+    # worker installs; the v43 activate handler must then delete every one of them.
     ctx2.route("**/sw.js", lambda r: r.abort())
     pg2 = ctx2.new_page(); pg2.on("pageerror", lambda e: errs2.append(str(e)))
     pg2.goto(URL); pg2.wait_for_timeout(500)
@@ -89,25 +89,25 @@ with sync_playwright() as p:
     out["lo_reload_gate"] = pg2.is_visible("#authGate")
     out["lo_reload_cta"] = pg2.is_visible("#accountCtaBtn")
 
-    # warm the v42 precache
+    # warm the v43 precache
     warm = 0
     for _ in range(60):
         warm = pg2.evaluate("""async () => {
           const ks = await caches.keys();
-          if (!ks.includes('hsk-flashcards-v42')) return 0;
-          return (await (await caches.open('hsk-flashcards-v42')).keys()).length; }""")
+          if (!ks.includes('hsk-flashcards-v43')) return 0;
+          return (await (await caches.open('hsk-flashcards-v43')).keys()).length; }""")
         if warm >= 40:
             break
         pg2.wait_for_timeout(500)
     out["lo_warm_entries"] = warm
     for _ in range(40):
         keys = pg2.evaluate("async () => (await caches.keys()).sort()")
-        if keys == ["hsk-flashcards-v42"]:
+        if keys == ["hsk-flashcards-v43"]:
             break
         pg2.wait_for_timeout(300)
     out["lo_caches"] = keys
     out["lo_distinct_assets"] = pg2.evaluate("""async () => {
-      const ks = await (await caches.open('hsk-flashcards-v42')).keys();
+      const ks = await (await caches.open('hsk-flashcards-v43')).keys();
       return new Set(ks.map(r => r.url)).size; }""")
 
     pg2.evaluate("() => { progress={}; save(); startStudy(['HSK1']); flipCard(); gradeCard('good'); }")
@@ -149,7 +149,7 @@ out["pass"]=bool(out.get("queued_dirty")==2 and out.get("studied_locally")==2
                  and out.get("lo_reload_gate") is False and out.get("lo_reload_cta")
                  and out.get("lo_warm_entries")==40
                  and out.get("lo_distinct_assets")==40
-                 and out.get("lo_caches")==["hsk-flashcards-v42"]
+                 and out.get("lo_caches")==["hsk-flashcards-v43"]
                  and out.get("lo_offline") and out.get("lo_offline_gate") is False
                  and out.get("lo_offline_cta")
                  and out.get("lo_offline_shell",{}).get("cards")==5002
